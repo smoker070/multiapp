@@ -115,8 +115,11 @@ warn() { printf '!!  %s\n' "$*" >&2; }
 info() { printf '%s\n' "$*"; }
 
 validate_name() {
-  [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{0,40}$ ]] || \
-    die "invalid profile name '$1' (letters, digits, hyphens; must start alphanumeric)"
+  local re='^[a-zA-Z0-9][a-zA-Z0-9 _-]{0,40}$'
+  [[ "$1" =~ $re ]] || \
+    die "invalid profile name '$1' (letters, digits, spaces, _ and -; must start alphanumeric)"
+  [[ "$1" == *" " ]] && die "invalid profile name '$1' (must not end with a space)"
+  return 0
 }
 
 require_app() { # $1=key → echoes app path
@@ -241,7 +244,7 @@ cmd_new() {
   mkdir -p "$dir"
   local note; note="$(reg_field "$key" 6)"; [ -n "$note" ] && warn "$note"
   info "created profile '$name' for $key"
-  info "launch it:  multiapp launch $key $name"
+  info "launch it:  multiapp launch $key \"$name\""
 }
 
 cmd_launch() {
@@ -372,10 +375,13 @@ wrapper_darwin() { # $1=key $2=name $3=app $4=display $5=profile dir
   rm -rf "$wapp"; mkdir -p "$WRAPPERS"
   # AppleScript applet = real Mach-O stub → Launch Services runs it reliably
   # (plain script-executable bundles are silently refused by LS on macOS 26)
-  osacompile -o "$wapp" -e "do shell script quoted form of \"$SELF\" & \" launch $key $name &> /dev/null &\"" \
+  # every argument goes through AppleScript's `quoted form of` → spaced names are safe
+  osacompile -o "$wapp" \
+    -e "do shell script quoted form of \"$SELF\" & \" launch \" & quoted form of \"$key\" & \" \" & quoted form of \"$name\" & \" &> /dev/null &\"" \
     || die "osacompile failed"
-  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.multiapp.profile.${key}.${name}" "$wapp/Contents/Info.plist" 2>/dev/null || \
-    /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string com.multiapp.profile.${key}.${name}" "$wapp/Contents/Info.plist"
+  local bidname; bidname="$(printf '%s' "$name" | tr ' ' '-')"   # bundle ids must not contain spaces
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.multiapp.profile.${key}.${bidname}" "$wapp/Contents/Info.plist" 2>/dev/null || \
+    /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string com.multiapp.profile.${key}.${bidname}" "$wapp/Contents/Info.plist"
   local iconname icns
   iconname="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$app/Contents/Info.plist" 2>/dev/null || true)"
   [ -n "$iconname" ] && { icns="$app/Contents/Resources/${iconname%.icns}.icns"; [ -f "$icns" ] && cp "$icns" "$wapp/Contents/Resources/applet.icns"; }
