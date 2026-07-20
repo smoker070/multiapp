@@ -53,7 +53,7 @@ install-stub · doctor · help` — plus Claude-only session ops on macOS/Linux:
 | `probe <app>` | 10-second canary: does the app honor the flag? Persists verdict for scanned apps |
 | `clone / rename / delete` | stopped profiles only; delete is type-name-confirmed → staged `Trash/` (recoverable) |
 | `wrapper` | macOS: `osacompile` applet with the app's icon; Linux: `.desktop`; Windows: Start-Menu `.lnk` |
-| `transfer claude <src> <dst> [sel]` | copy chosen Claude Code sessions between profiles on one machine |
+| `transfer claude <src> <dst> [sel]` | copy chosen Claude Code sessions between profiles on one machine — a **true copy**: new session ids + duplicated transcript, so the two profiles never share a live session (transcripts live in `~/.claude`, which `--user-data-dir` does not isolate) |
 | `export/import claude` | bundle chosen sessions (index + transcripts) to move to another machine |
 | `install-stub` | (re)install the move-proof launcher on PATH |
 

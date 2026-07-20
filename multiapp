@@ -445,6 +445,9 @@ cmd_probe() { # canary: does this app honor --user-data-dir= ?  (seed of E10)
 # Storage model (verified on macOS 2026-07-15; Linux paths analogous under ~/.config):
 #   session INDEX:  <userData>/claude-code-sessions/<acct>/<sub>/local_<id>.json  (per profile)
 #   TRANSCRIPTS:    ~/.claude/projects/<encoded-cwd>/<cliSessionId>.jsonl         (shared per machine)
+# ⚠ Because transcripts live in the REAL home, --user-data-dir does NOT isolate them. Copying an
+#   index file alone would leave two profiles reading/writing ONE transcript — a live session
+#   shared across two accounts. `transfer` therefore mints new ids and duplicates the transcript.
 claude_data_root() { # $1=profile name or "main" → userData dir
   if [ "$1" = "main" ]; then printf '%s' "$CLAUDE_MAIN"
   else local d; d="$(profile_dir claude "$1")"; [ -d "$d" ] || die "no such claude profile: $1 (name or 'main')"; printf '%s' "$d/data"; fi
@@ -515,13 +518,38 @@ cmd_transfer() {
   fi
   warn "sessions contain your private conversation data"
   local chosen; chosen="$(pick_sessions "$sroot" "$presel")"
-  local copied=0 skipped=0
+  local copied=0 notranscript=0
   while IFS=$'\t' read -r f cli date cwd title; do
     [ -n "$f" ] || continue
-    if [ -e "$acct/$(basename "$f")" ]; then skipped=$((skipped+1)); continue; fi
-    cp "$f" "$acct/"; copied=$((copied+1))
+    # A TRUE COPY. Copying only the index file would leave both profiles pointing at the SAME
+    # transcript in the shared ~/.claude — the session would then be live-shared between two
+    # accounts (and two writers could corrupt it). So we mint fresh ids and duplicate the
+    # transcript, rewriting the embedded session id, giving the destination an independent copy.
+    # NB: do NOT name these src/dst — that would clobber the function's source/dest profile args
+    local newcli newlocal proj tsrc tdst
+    newcli="$(/usr/bin/python3 -c 'import uuid;print(uuid.uuid4())')"
+    newlocal="$(/usr/bin/python3 -c 'import uuid;print(uuid.uuid4())')"
+    proj="$(encode_cwd "$cwd")"
+    tsrc="$HOME/.claude/projects/$proj/$cli.jsonl"
+    tdst="$HOME/.claude/projects/$proj/$newcli.jsonl"
+    if [ -f "$tsrc" ]; then
+      LC_ALL=C sed "s/$cli/$newcli/g" "$tsrc" > "$tdst"
+    else
+      notranscript=$((notranscript+1))
+    fi
+    /usr/bin/python3 - "$f" "$acct/local_$newlocal.json" "$newcli" "local_$newlocal" <<'PY'
+import json, sys
+src, dst, newcli, newsid = sys.argv[1:5]
+d = json.load(open(src))
+d["cliSessionId"] = newcli
+d["sessionId"]    = newsid
+json.dump(d, open(dst, "w"))
+PY
+    copied=$((copied+1))
   done <<< "$chosen"
-  info "transferred $copied session(s) to '$dst' ($skipped already existed)"
+  info "copied $copied session(s) into '$dst' as independent copies"
+  [ "$notranscript" -gt 0 ] && warn "$notranscript had no transcript file (index copied only)"
+  info "the originals in '$src' are untouched and stay separate from now on"
   info "restart the '$dst' instance to see them in the session list"
 }
 
