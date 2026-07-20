@@ -1,0 +1,14 @@
+# build artifacts
+app/build/
+app/dist/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# editors
+.vscode/
+.idea/
+*.swp

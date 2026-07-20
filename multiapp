@@ -1,0 +1,698 @@
+#!/usr/bin/env bash
+# multiapp — prototype multi-profile launcher (macOS + Linux; Windows: multiapp.ps1)
+# Project: Multiapp · Phase 0 prototype
+# Mechanism (verified on macOS, experiments E1/E2/E4/E11; same lever on all OSes
+# because it is Electron/Chromium, not app-specific):
+#   launch <App> with  --user-data-dir=<profile dir>     ← EQUALS form is mandatory
+# No binaries are modified. No env overrides needed. Keychain is never touched.
+set -euo pipefail
+
+VERSION="0.2.0"
+
+# ================================================================ platform layer
+case "$(uname -s)" in
+  Darwin) PLATFORM=darwin ;;
+  Linux)  PLATFORM=linux ;;
+  *) printf 'multiapp: unsupported platform %s (on Windows use multiapp.ps1)\n' "$(uname -s)" >&2; exit 1 ;;
+esac
+
+if [ "$PLATFORM" = darwin ]; then
+  ROOT_DEFAULT="$HOME/Library/Application Support/Multiapp"
+  WRAPPERS="$HOME/Applications/Multiapp"
+  CLAUDE_MAIN="$HOME/Library/Application Support/Claude"
+  SCAN_DIRS=(/Applications "$HOME/Applications")
+else
+  ROOT_DEFAULT="${XDG_DATA_HOME:-$HOME/.local/share}/multiapp"
+  WRAPPERS="${XDG_DATA_HOME:-$HOME/.local/share}/applications"   # .desktop launchers
+  CLAUDE_MAIN="${XDG_CONFIG_HOME:-$HOME/.config}/Claude"
+  SCAN_DIRS=(/usr/share/applications "$HOME/.local/share/applications")
+fi
+ROOT="${MULTIAPP_HOME:-$ROOT_DEFAULT}"
+PROFILES="$ROOT/Profiles"
+TRASH="$ROOT/Trash"
+USER_REG="$ROOT/registry.local"
+CONF="${XDG_CONFIG_HOME:-$HOME/.config}/multiapp/target"
+
+# self-register this script's real location so the launcher stub self-heals after a move
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+if [ "$(cat "$CONF" 2>/dev/null || true)" != "$SELF" ]; then
+  mkdir -p "$(dirname "$CONF")" 2>/dev/null || true
+  printf '%s' "$SELF" > "$CONF" 2>/dev/null || true
+fi
+
+# --- platform-specific primitives -------------------------------------------
+stat_mtime() { # $1=path → epoch seconds
+  if [ "$PLATFORM" = darwin ]; then stat -f %m "$1"; else stat -c %Y "$1"; fi
+}
+
+cp_clone() { # $1=src $2=dst  (fast copy-on-write when the FS supports it)
+  if [ "$PLATFORM" = darwin ]; then cp -c -R "$1" "$2" 2>/dev/null || cp -R "$1" "$2"
+  else cp -R --reflink=auto "$1" "$2" 2>/dev/null || cp -R "$1" "$2"; fi
+}
+
+os_version() {
+  if [ "$PLATFORM" = darwin ]; then printf 'macOS %s' "$(sw_vers -productVersion 2>/dev/null || echo '?')"
+  else printf '%s' "$( ( . /etc/os-release 2>/dev/null && echo "$PRETTY_NAME" ) || uname -sr )"; fi
+}
+
+app_exec() { # $1=registry app path → the actual executable to launch
+  if [ "$PLATFORM" = darwin ]; then
+    local exe; exe="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$1/Contents/Info.plist" 2>/dev/null)" \
+      || die "cannot read Info.plist of $1"
+    printf '%s/Contents/MacOS/%s' "$1" "$exe"
+  else
+    printf '%s' "$1"   # on Linux the registry path IS the binary/AppImage
+  fi
+}
+
+app_installed() { # $1=registry app path → 0 if present
+  if [ "$PLATFORM" = darwin ]; then [ -d "$1" ]; else [ -x "$1" ] || command -v "$1" >/dev/null 2>&1; fi
+}
+
+plat_launch() { # $1=app path  $2=data dir  then extra flags + passthrough args
+  local app="$1" data="$2"; shift 2
+  if [ "$PLATFORM" = darwin ]; then
+    # open -n forces a new instance; --args passes flags to the app
+    open -n "$app" --args --user-data-dir="$data" "$@"
+  else
+    # Linux: separate --user-data-dir → separate singleton lock → new instance
+    local bin; bin="$(app_exec "$app")"
+    setsid "$bin" --user-data-dir="$data" "$@" >/dev/null 2>&1 < /dev/null &
+  fi
+}
+
+# =============================================================== registry
+# key|app path|display name|adapter|verdict|note
+# adapter: electron = --user-data-dir only · vscode = + --extensions-dir
+# NB paths below are macOS. On Linux run `multiapp scan` to populate registry.local
+# with the real binary paths for your distro (app locations vary too much to hardcode).
+REGISTRY="\
+claude|/Applications/Claude.app|Claude|electron|supported|
+chatgpt|/Applications/ChatGPT.app|ChatGPT|electron|partial|Data isolates but the ACCOUNT is shared across profiles (Keychain identity). Do NOT sign out inside a profile.
+notion|/Applications/Notion.app|Notion|electron|supported|
+notion-calendar|/Applications/Notion Calendar.app|Notion Calendar|electron|supported|
+github|/Applications/GitHub Desktop.app|GitHub Desktop|electron|supported|
+vscode|/Applications/Visual Studio Code.app|Visual Studio Code|vscode|supported|
+antigravity|/Applications/Antigravity.app|Antigravity|vscode|supported|
+antigravity-ide|/Applications/Antigravity IDE.app|Antigravity IDE|vscode|supported|
+openmtp|/Applications/OpenMTP.app|OpenMTP|electron|supported|
+gemini|/Applications/Gemini.app|Gemini|none|unsupported|Native app, no isolation lever exists (E6).
+chatgpt-classic|/Applications/ChatGPT Classic.app|ChatGPT Classic|none|unsupported|Native pre-merge app, no levers; shares OpenAI identity with new ChatGPT.
+telegram|/Applications/Telegram.app|Telegram|none|unsupported|Sandboxed (container is bundle-ID-keyed). Use Telegram's built-in multi-account instead.
+hdrezka|/Applications/HDRezka-Client.app|HDRezka-Client|none|unsupported|App overrides userData in its own code (E11); flag is ignored."
+
+full_registry() {
+  printf '%s\n' "$REGISTRY"
+  [ -f "$USER_REG" ] && grep -v '^[[:space:]]*$' "$USER_REG" || true
+}
+
+reg_field() { # $1=key $2=field-index(1..6)
+  full_registry | awk -F'|' -v k="$1" -v f="$2" '$1==k {print $f; exit}'
+}
+
+die()  { printf 'multiapp: %s\n' "$*" >&2; exit 1; }
+warn() { printf '!!  %s\n' "$*" >&2; }
+info() { printf '%s\n' "$*"; }
+
+validate_name() {
+  [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]{0,40}$ ]] || \
+    die "invalid profile name '$1' (letters, digits, hyphens; must start alphanumeric)"
+}
+
+require_app() { # $1=key → echoes app path
+  local key="$1" path verdict note
+  path="$(reg_field "$key" 2)"
+  [ -n "$path" ] || die "unknown app '$key' — see: multiapp apps"
+  verdict="$(reg_field "$key" 5)"
+  note="$(reg_field "$key" 6)"
+  if [ "$verdict" = "unsupported" ]; then die "'$key' is UNSUPPORTED: $note"; fi
+  if [ "$verdict" = "untested" ]; then warn "'$key' is untested — verify it first with: multiapp probe $key"; fi
+  app_installed "$path" || die "app not installed: $path"
+  printf '%s' "$path"
+}
+
+profile_dir() { printf '%s/%s/%s' "$PROFILES" "$1" "$2"; }
+
+running_pids() { # $1=profile dir → pids of ANY process bound to this profile
+  ps -eo pid,args 2>/dev/null | grep -F -- "--user-data-dir=$1" | grep -v grep | awk '{print $1}'
+}
+
+main_pid() { # $1=app path $2=profile dir → pid of the main process only
+  local exe; exe="$(app_exec "$1")"
+  ps -eo pid,args 2>/dev/null | grep -F -- "$exe --user-data-dir=$2" | grep -v grep | awk '{print $1}' | head -1
+}
+
+is_running() { [ -n "$(running_pids "$1")" ]; }
+
+assert_inside_root() { # safety: refuse to operate outside our root
+  case "$(cd "$(dirname "$1")" 2>/dev/null && pwd)/$(basename "$1")" in
+    "$ROOT"/*) ;;
+    *) die "safety stop: '$1' is outside $ROOT" ;;
+  esac
+}
+
+# ================================================================ commands
+cmd_apps() {
+  printf '%-20s %-24s %-11s %s\n' "KEY" "APP" "VERDICT" "NOTE"
+  full_registry | while IFS='|' read -r key path name adapter verdict note; do
+    [ -n "$key" ] || continue
+    app_installed "$path" || { printf '%-20s %-24s %-11s %s\n' "$key" "$name" "not installed" ""; continue; }
+    printf '%-20s %-24s %-11s %s\n' "$key" "$name" "$verdict" "$note"
+  done
+}
+
+# --- app discovery / scan ----------------------------------------------------
+scan_darwin() {
+  local app base display key runtime pc sb
+  local added=0 native=0 sandboxed=0 known=0
+  local d
+  for d in "${SCAN_DIRS[@]}"; do
+    [ -d "$d" ] || continue
+    for app in "$d"/*.app; do
+      [ -d "$app" ] || continue
+      if full_registry | awk -F'|' -v p="$app" '$2==p{f=1} END{exit !f}'; then known=$((known+1)); continue; fi
+      runtime=""
+      if [ -f "$app/Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework" ]; then
+        runtime="electron"
+      else
+        pc="$(/usr/libexec/PlistBuddy -c 'Print :NSPrincipalClass' "$app/Contents/Info.plist" 2>/dev/null || true)"
+        [ "$pc" = "BrowserCrApplication" ] && runtime="chromium"
+      fi
+      [ -z "$runtime" ] && { native=$((native+1)); continue; }
+      sb="$(codesign -d --entitlements :- "$app" 2>/dev/null | plutil -extract 'com\.apple\.security\.app-sandbox' raw -o - - 2>/dev/null || true)"
+      [ "$sb" = "true" ] && { sandboxed=$((sandboxed+1)); continue; }
+      base="$(basename "$app" .app)"; display="$base"
+      key="$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')"
+      [ -n "$key" ] || continue
+      if full_registry | awk -F'|' -v k="$key" '$1==k{f=1} END{exit !f}'; then warn "skipping $base — key '$key' taken"; continue; fi
+      printf '%s|%s|%s|electron|untested|found by scan (%s); verify: multiapp probe %s\n' \
+        "$key" "$app" "$display" "$runtime" "$key" >> "$USER_REG"
+      info "  + $display  ->  key: $key  ($runtime, untested)"; added=$((added+1))
+    done
+  done
+  info ""
+  info "scan done: $added added, $known known, $native native (no lever), $sandboxed sandboxed"
+  [ "$added" -gt 0 ] && info "verify with:  multiapp probe <key>"
+}
+
+scan_linux() {
+  # parse .desktop files, keep ones whose Exec resolves to an Electron binary
+  local desk exec bin base key display added=0 known=0 nonelectron=0
+  local d
+  for d in "${SCAN_DIRS[@]}"; do
+    [ -d "$d" ] || continue
+    for desk in "$d"/*.desktop; do
+      [ -f "$desk" ] || continue
+      exec="$(awk -F= '/^Exec=/{print $2; exit}' "$desk" 2>/dev/null | awk '{print $1}')"
+      [ -n "$exec" ] || continue
+      bin="$(command -v "$exec" 2>/dev/null || echo "$exec")"
+      [ -x "$bin" ] || continue
+      # Electron heuristic: an unpacked resources dir or an "electron" string in the binary
+      if ! { [ -d "$(dirname "$bin")/resources" ] || strings -a "$bin" 2>/dev/null | grep -qm1 -i electron; }; then
+        nonelectron=$((nonelectron+1)); continue
+      fi
+      if full_registry | awk -F'|' -v p="$bin" '$2==p{f=1} END{exit !f}'; then known=$((known+1)); continue; fi
+      base="$(basename "$desk" .desktop)"; display="$base"
+      key="$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]' | tr ' ._' '-' | tr -cd 'a-z0-9-')"
+      [ -n "$key" ] || continue
+      if full_registry | awk -F'|' -v k="$key" '$1==k{f=1} END{exit !f}'; then continue; fi
+      printf '%s|%s|%s|electron|untested|found by scan (linux); verify: multiapp probe %s\n' \
+        "$key" "$bin" "$display" "$key" >> "$USER_REG"
+      info "  + $display  ->  key: $key  (electron?, untested)"; added=$((added+1))
+    done
+  done
+  info ""
+  info "scan done: $added added, $known known, $nonelectron non-electron skipped"
+  [ "$added" -gt 0 ] && info "verify with:  multiapp probe <key>"
+}
+
+cmd_scan() {
+  mkdir -p "$ROOT"
+  info "scanning for profile-capable apps ($PLATFORM)…"
+  if [ "$PLATFORM" = darwin ]; then scan_darwin; else scan_linux; fi
+}
+
+cmd_new() {
+  local key="${1:-}" name="${2:-}"; [ -n "$key" ] && [ -n "$name" ] || die "usage: multiapp new <app> <profile>"
+  validate_name "$name"
+  require_app "$key" >/dev/null
+  local dir; dir="$(profile_dir "$key" "$name")"
+  [ -e "$dir" ] && die "profile already exists: $dir"
+  mkdir -p "$dir"
+  local note; note="$(reg_field "$key" 6)"; [ -n "$note" ] && warn "$note"
+  info "created profile '$name' for $key"
+  info "launch it:  multiapp launch $key $name"
+}
+
+cmd_launch() {
+  local key="${1:-}" name="${2:-}"; [ -n "$key" ] && [ -n "$name" ] || die "usage: multiapp launch <app> <profile> [-- app args]"
+  shift 2 || true
+  validate_name "$name"
+  local app; app="$(require_app "$key")"
+  local dir; dir="$(profile_dir "$key" "$name")"
+  [ -d "$dir" ] || die "no such profile '$name' for '$key' — create it: multiapp new $key $name"
+  is_running "$dir" && warn "profile '$name' already has a running instance"
+  local note; note="$(reg_field "$key" 6)"; [ -n "$note" ] && warn "$note"
+  local adapter; adapter="$(reg_field "$key" 4)"
+  local extra=()
+  if [ "$adapter" = "vscode" ]; then
+    mkdir -p "$dir/extensions"
+    extra=(--extensions-dir "$dir/extensions")   # VS Code family parses this itself
+  fi
+  mkdir -p "$dir/data"
+  # EQUALS form for --user-data-dir; ${extra[@]+…} guards macOS bash 3.2 + set -u
+  plat_launch "$app" "$dir/data" ${extra[@]+"${extra[@]}"} "$@"
+  date +%s > "$dir/.last-launch" 2>/dev/null || true
+  info "launched $key/$name"
+}
+
+cmd_list() {
+  local raw=0 filter=""
+  while [ $# -gt 0 ]; do
+    case "$1" in --raw) raw=1 ;; *) filter="$1" ;; esac; shift
+  done
+  [ -d "$PROFILES" ] || { [ "$raw" = 1 ] || info "no profiles yet — create one: multiapp new <app> <profile>"; return; }
+  [ "$raw" = 1 ] || printf '%-16s %-20s %-9s %s\n' "APP" "PROFILE" "STATE" "SIZE"
+  local appdir key name dir state size
+  for appdir in "$PROFILES"/*/; do
+    [ -d "$appdir" ] || continue
+    key="$(basename "$appdir")"
+    [ -n "$filter" ] && [ "$key" != "$filter" ] && continue
+    for dir in "$appdir"*/; do
+      [ -d "$dir" ] || continue
+      name="$(basename "$dir")"
+      if is_running "${dir%/}" || is_running "${dir%/}/data"; then state="running"; else state="stopped"; fi
+      if [ "$raw" = 1 ]; then
+        printf '%s|%s|%s\n' "$key" "$name" "$state"      # fast, no du — used by the menu-bar app
+      else
+        size="$(du -sh "$dir" 2>/dev/null | awk '{print $1}')"
+        printf '%-16s %-20s %-9s %s\n' "$key" "$name" "$state" "$size"
+      fi
+    done
+  done
+}
+
+cmd_stop() {
+  local key="${1:-}" name="${2:-}"; [ -n "$key" ] && [ -n "$name" ] || die "usage: multiapp stop <app> <profile>"
+  local app; app="$(require_app "$key")"
+  local dir; dir="$(profile_dir "$key" "$name")"
+  local pid
+  pid="$(main_pid "$app" "$dir/data")"; [ -z "$pid" ] && pid="$(main_pid "$app" "$dir")"
+  [ -n "$pid" ] || die "no running instance for $key/$name"
+  kill -TERM "$pid"
+  info "sent quit to $key/$name (pid $pid)"
+}
+
+cmd_clone() {
+  local key="${1:-}" src="${2:-}" dst="${3:-}"
+  [ -n "$key" ] && [ -n "$src" ] && [ -n "$dst" ] || die "usage: multiapp clone <app> <src-profile> <dst-profile>"
+  validate_name "$src"; validate_name "$dst"
+  require_app "$key" >/dev/null
+  local sdir ddir; sdir="$(profile_dir "$key" "$src")"; ddir="$(profile_dir "$key" "$dst")"
+  [ -d "$sdir" ] || die "no such profile: $key/$src"
+  [ -e "$ddir" ] && die "target already exists: $key/$dst"
+  { is_running "$sdir" || is_running "$sdir/data"; } && die "stop '$src' before cloning (live databases would copy inconsistently)"
+  warn "cloning copies session cookies — the server will see a duplicated session"
+  cp_clone "$sdir" "$ddir"
+  rm -f "$ddir/.last-launch"
+  info "cloned $key/$src → $key/$dst"
+}
+
+cmd_rename() {
+  local key="${1:-}" old="${2:-}" new="${3:-}"
+  [ -n "$key" ] && [ -n "$old" ] && [ -n "$new" ] || die "usage: multiapp rename <app> <old-name> <new-name>"
+  validate_name "$old"; validate_name "$new"
+  require_app "$key" >/dev/null
+  local odir ndir; odir="$(profile_dir "$key" "$old")"; ndir="$(profile_dir "$key" "$new")"
+  [ -d "$odir" ] || die "no such profile: $key/$old"
+  [ -e "$ndir" ] && die "target name already exists: $key/$new"
+  { is_running "$odir" || is_running "$odir/data"; } && die "profile is running — stop it first: multiapp stop $key $old"
+  mv "$odir" "$ndir"
+  info "renamed $key/$old → $key/$new"
+  # refresh a wrapper if one existed for the old name
+  local display; display="$(reg_field "$key" 3)"
+  if [ "$PLATFORM" = darwin ]; then
+    [ -d "$WRAPPERS/$display – $old.app" ] && { rm -rf "$WRAPPERS/$display – $old.app"; cmd_wrapper "$key" "$new"; }
+  else
+    [ -f "$WRAPPERS/multiapp-$key-$old.desktop" ] && { rm -f "$WRAPPERS/multiapp-$key-$old.desktop"; cmd_wrapper "$key" "$new"; }
+  fi
+}
+
+cmd_delete() {
+  local key="${1:-}" name="${2:-}"; [ -n "$key" ] && [ -n "$name" ] || die "usage: multiapp delete <app> <profile>"
+  validate_name "$name"
+  local dir; dir="$(profile_dir "$key" "$name")"
+  [ -d "$dir" ] || die "no such profile: $key/$name"
+  { is_running "$dir" || is_running "$dir/data"; } && die "profile is running — stop it first: multiapp stop $key $name"
+  assert_inside_root "$dir"
+  printf "Type the profile name to move '%s/%s' to Multiapp Trash (recoverable): " "$key" "$name"
+  read -r answer
+  [ "$answer" = "$name" ] || die "aborted (name mismatch)"
+  mkdir -p "$TRASH"
+  mv "$dir" "$TRASH/${key}__${name}__$(date +%Y%m%d-%H%M%S)"
+  info "moved to $TRASH — restore by moving it back, purge with: multiapp trash purge"
+}
+
+cmd_trash() {
+  case "${1:-list}" in
+    list)  ls -la "$TRASH" 2>/dev/null || info "trash is empty" ;;
+    purge)
+      [ -d "$TRASH" ] || { info "trash is empty"; return; }
+      printf "Permanently delete everything in %s ? [y/N] " "$TRASH"
+      read -r a; [ "$a" = "y" ] || die "aborted"
+      assert_inside_root "$TRASH"
+      rm -rf "$TRASH"; info "trash purged" ;;
+    *) die "usage: multiapp trash [list|purge]" ;;
+  esac
+}
+
+wrapper_darwin() { # $1=key $2=name $3=app $4=display $5=profile dir
+  local key="$1" name="$2" app="$3" display="$4"
+  local wapp="$WRAPPERS/$display – $name.app"
+  rm -rf "$wapp"; mkdir -p "$WRAPPERS"
+  # AppleScript applet = real Mach-O stub → Launch Services runs it reliably
+  # (plain script-executable bundles are silently refused by LS on macOS 26)
+  osacompile -o "$wapp" -e "do shell script quoted form of \"$SELF\" & \" launch $key $name &> /dev/null &\"" \
+    || die "osacompile failed"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.multiapp.profile.${key}.${name}" "$wapp/Contents/Info.plist" 2>/dev/null || \
+    /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string com.multiapp.profile.${key}.${name}" "$wapp/Contents/Info.plist"
+  local iconname icns
+  iconname="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$app/Contents/Info.plist" 2>/dev/null || true)"
+  [ -n "$iconname" ] && { icns="$app/Contents/Resources/${iconname%.icns}.icns"; [ -f "$icns" ] && cp "$icns" "$wapp/Contents/Resources/applet.icns"; }
+  codesign --force -s - "$wapp" 2>/dev/null || true
+  info "wrapper created: $wapp"
+  info "drag it to the Dock; it launches this profile with one click"
+}
+
+wrapper_linux() { # $1=key $2=name $3=app $4=display
+  local key="$1" name="$2" display="$4"
+  mkdir -p "$WRAPPERS"
+  local f="$WRAPPERS/multiapp-$key-$name.desktop"
+  cat > "$f" <<DESK
+[Desktop Entry]
+Type=Application
+Name=$display – $name
+Comment=Multiapp isolated profile
+Exec=$SELF launch $key $name
+Terminal=false
+Categories=Utility;
+DESK
+  chmod +x "$f"
+  info "launcher created: $f  (appears in your app menu)"
+}
+
+cmd_wrapper() {
+  local key="${1:-}" name="${2:-}"; [ -n "$key" ] && [ -n "$name" ] || die "usage: multiapp wrapper <app> <profile>"
+  validate_name "$name"
+  local app; app="$(require_app "$key")"
+  local dir; dir="$(profile_dir "$key" "$name")"
+  [ -d "$dir" ] || die "no such profile: $key/$name"
+  local display; display="$(reg_field "$key" 3)"
+  if [ "$PLATFORM" = darwin ]; then wrapper_darwin "$key" "$name" "$app" "$display" "$dir"
+  else wrapper_linux "$key" "$name" "$app" "$display"; fi
+}
+
+cmd_probe() { # canary: does this app honor --user-data-dir= ?  (seed of E10)
+  local key="${1:-}"; [ -n "$key" ] || die "usage: multiapp probe <app>"
+  local path; path="$(reg_field "$key" 2)"
+  [ -n "$path" ] || die "unknown app '$key'"
+  app_installed "$path" || die "not installed: $path"
+  local tmp="$ROOT/Probes/$key-$$"
+  mkdir -p "$tmp"
+  info "probing $key (launches for ~10s)…"
+  plat_launch "$path" "$tmp"
+  sleep 10
+  local verdict newv newnote
+  if [ -n "$(ls "$tmp" 2>/dev/null)" ]; then
+    verdict="HONORED"; newv="supported"
+    newnote="probe $(date +%Y-%m-%d): flag honored (data isolation); account isolation not verified"
+  else
+    verdict="IGNORED"; newv="unsupported"
+    newnote="probe $(date +%Y-%m-%d): flag ignored (app likely overrides its data path)"
+  fi
+  ps -eo pid,args 2>/dev/null | grep -F -- "--user-data-dir=$tmp" | grep -v grep | awk '{print $1}' | xargs kill -TERM 2>/dev/null || true
+  sleep 2
+  ps -eo pid,args 2>/dev/null | grep -F -- "--user-data-dir=$tmp" | grep -v grep | awk '{print $1}' | xargs kill -9 2>/dev/null || true
+  assert_inside_root "$tmp"; rm -rf "$tmp"
+  info "$key: --user-data-dir= $verdict"
+  if [ -f "$USER_REG" ] && grep -q "^$key|" "$USER_REG"; then
+    awk -F'|' -v OFS='|' -v k="$key" -v v="$newv" -v n="$newnote" '$1==k{$5=v;$6=n} {print}' "$USER_REG" > "$USER_REG.tmp" && mv "$USER_REG.tmp" "$USER_REG"
+    info "registry updated: $key → $newv"
+  fi
+}
+
+# ------------------------------------------------ session-level ops (claude adapter)
+# Storage model (verified on macOS 2026-07-15; Linux paths analogous under ~/.config):
+#   session INDEX:  <userData>/claude-code-sessions/<acct>/<sub>/local_<id>.json  (per profile)
+#   TRANSCRIPTS:    ~/.claude/projects/<encoded-cwd>/<cliSessionId>.jsonl         (shared per machine)
+claude_data_root() { # $1=profile name or "main" → userData dir
+  if [ "$1" = "main" ]; then printf '%s' "$CLAUDE_MAIN"
+  else local d; d="$(profile_dir claude "$1")"; [ -d "$d" ] || die "no such claude profile: $1 (name or 'main')"; printf '%s' "$d/data"; fi
+}
+
+require_claude() { [ "${1:-}" = "claude" ] || die "session-level commands support 'claude' only (other apps: whole-profile export/import)"; }
+
+list_claude_sessions() { # $1=userData → TSV: file cli date cwd title
+  python3 - "$1" <<'PY'
+import glob, json, os, sys, datetime
+root = os.path.join(sys.argv[1], "claude-code-sessions")
+rows = []
+for f in glob.glob(os.path.join(root, "*", "*", "local_*.json")):
+    try: d = json.load(open(f))
+    except Exception: continue
+    ts = d.get("lastActivityAt") or d.get("createdAt") or 0
+    rows.append((ts, f, d.get("cliSessionId",""), d.get("cwd",""), (d.get("title") or "(no title)")[:70]))
+rows.sort(reverse=True)
+for ts, f, cli, cwd, title in rows:
+    date = datetime.datetime.fromtimestamp(ts/1000).strftime("%Y-%m-%d %H:%M") if ts else "?"
+    print(f"{f}\t{cli}\t{date}\t{cwd}\t{title}")
+PY
+}
+
+encode_cwd() { python3 -c 'import re,sys; print(re.sub(r"[^A-Za-z0-9-]","-",sys.argv[1]))' "$1"; }
+
+pick_sessions() { # $1=userData $2=optional preselection → chosen TSV lines on stdout
+  local tmp; tmp="$(mktemp)"
+  list_claude_sessions "$1" > "$tmp"
+  [ -s "$tmp" ] || { rm -f "$tmp"; die "no Claude Code sessions found in: $1"; }
+  local sel="${2:-}"
+  if [ -z "$sel" ]; then
+    local i=0
+    while IFS=$'\t' read -r f cli date cwd title; do i=$((i+1)); printf '%3d) %s  %-40s  %s\n' "$i" "$date" "$title" "$cwd" >&2; done < "$tmp"
+    printf 'Select sessions (e.g. 1,3,5 or "all"): ' >&2; read -r sel
+  fi
+  if [ "$sel" = "all" ]; then cat "$tmp"
+  else local n; for n in $(printf '%s' "$sel" | tr ',' ' '); do [[ "$n" =~ ^[0-9]+$ ]] || { rm -f "$tmp"; die "bad selection: $n"; }; sed -n "${n}p" "$tmp"; done; fi
+  rm -f "$tmp"
+}
+
+dst_account_dir() { # $1=dst userData → newest <acct>/<sub> dir, or empty
+  [ -d "$1/claude-code-sessions" ] || return 0
+  find "$1/claude-code-sessions" -mindepth 2 -maxdepth 2 -type d 2>/dev/null \
+    | while read -r d; do printf '%s %s\n' "$(stat_mtime "$d")" "$d"; done | sort -rn | head -1 | cut -d' ' -f2-
+}
+
+cmd_sessions() {
+  require_claude "${1:-}"; local name="${2:-main}" raw=0
+  [ "${3:-}" = "--raw" ] && raw=1
+  local root; root="$(claude_data_root "$name")"
+  if [ "$raw" = 1 ]; then list_claude_sessions "$root"; return; fi   # TSV for the GUI
+  info "Claude Code sessions in '$name' ($root):"
+  local i=0
+  list_claude_sessions "$root" | while IFS=$'\t' read -r f cli date cwd title; do i=$((i+1)); printf '%3d) %s  %-40s  %s\n' "$i" "$date" "$title" "$cwd"; done
+}
+
+cmd_transfer() {
+  require_claude "${1:-}"; local src="${2:-}" dst="${3:-}" presel="${4:-}"
+  [ -n "$src" ] && [ -n "$dst" ] || die "usage: multiapp transfer claude <src|main> <dst|main> [1,3,5|all]"
+  [ "$src" = "$dst" ] && die "source and destination are the same"
+  local sroot droot; sroot="$(claude_data_root "$src")"; droot="$(claude_data_root "$dst")"
+  local acct; acct="$(dst_account_dir "$droot")"
+  if [ -z "$acct" ]; then
+    warn "destination '$dst' has no Claude Code identity yet."
+    warn "Open the Claude Code tab once in that profile (start any tiny session), then re-run."
+    die  "aborting — cannot pick a destination account directory"
+  fi
+  warn "sessions contain your private conversation data"
+  local chosen; chosen="$(pick_sessions "$sroot" "$presel")"
+  local copied=0 skipped=0
+  while IFS=$'\t' read -r f cli date cwd title; do
+    [ -n "$f" ] || continue
+    if [ -e "$acct/$(basename "$f")" ]; then skipped=$((skipped+1)); continue; fi
+    cp "$f" "$acct/"; copied=$((copied+1))
+  done <<< "$chosen"
+  info "transferred $copied session(s) to '$dst' ($skipped already existed)"
+  info "restart the '$dst' instance to see them in the session list"
+}
+
+cmd_export() {
+  local key="${1:-}" name="${2:-}"; [ -n "$key" ] && [ -n "$name" ] || die "usage: multiapp export <app> <profile|main> [out.tar.gz]"
+  local desk="$HOME/Desktop"; [ -d "$desk" ] || desk="$HOME"
+  local out="${3:-$desk/multiapp-${key}-${name}-$(date +%Y%m%d-%H%M%S).tar.gz}"
+  if [ "$key" != "claude" ]; then
+    local dir; dir="$(profile_dir "$key" "$name")"
+    [ -d "$dir" ] || die "no such profile: $key/$name"
+    { is_running "$dir" || is_running "$dir/data"; } && die "stop the profile before exporting"
+    warn "the archive will contain session cookies/logins — keep it private"
+    tar -czf "$out" -C "$(dirname "$dir")" "$(basename "$dir")"
+    info "exported whole profile → $out"; return
+  fi
+  local presel="${4:-}"   # optional non-interactive selection (e.g. "all") — used by the GUI
+  local root; root="$(claude_data_root "$name")"
+  warn "the archive will contain your private conversations — keep it private"
+  local chosen; chosen="$(pick_sessions "$root" "$presel")"
+  local stage; stage="$(mktemp -d)"
+  mkdir -p "$stage/index" "$stage/transcripts"
+  printf '{"multiapp":"%s","app":"claude","kind":"claude-code-sessions"}\n' "$VERSION" > "$stage/manifest.json"
+  local n=0 missing=0
+  while IFS=$'\t' read -r f cli date cwd title; do
+    [ -n "$f" ] || continue
+    cp "$f" "$stage/index/"
+    local proj; proj="$(encode_cwd "$cwd")"
+    local tr="$HOME/.claude/projects/$proj/$cli.jsonl"
+    if [ -f "$tr" ]; then mkdir -p "$stage/transcripts/$proj"; cp "$tr" "$stage/transcripts/$proj/"; n=$((n+1))
+    else warn "transcript missing for: $title"; missing=$((missing+1)); fi
+  done <<< "$chosen"
+  tar -czf "$out" -C "$stage" .
+  rm -rf "$stage"
+  info "exported $n session(s) ($missing without transcript) → $out"
+  info "import on the other machine:  multiapp import claude <profile|main> <this file>"
+}
+
+cmd_import() {
+  local key="${1:-}" name="${2:-}" file="${3:-}"
+  [ -n "$key" ] && [ -n "$name" ] && [ -n "$file" ] || die "usage: multiapp import <app> <profile|main> <archive.tar.gz>"
+  [ -f "$file" ] || die "no such file: $file"
+  tar -tzf "$file" | grep -qE '(^/|(^|/)\.\.(/|$))' && die "unsafe archive (absolute or ../ paths) — refusing"
+  if [ "$key" != "claude" ] || ! tar -tzf "$file" | grep -q '^\./manifest.json$'; then
+    validate_name "$name"; require_app "$key" >/dev/null
+    local dir; dir="$(profile_dir "$key" "$name")"
+    [ -e "$dir" ] && die "profile already exists: $key/$name"
+    mkdir -p "$dir"; tar -xzf "$file" -C "$dir" --strip-components 1
+    info "imported archive as new profile $key/$name"; return
+  fi
+  local root; root="$(claude_data_root "$name")"
+  local acct; acct="$(dst_account_dir "$root")"
+  [ -n "$acct" ] || die "destination '$name' has no Claude Code identity yet — open Claude Code there once, then re-run"
+  local stage; stage="$(mktemp -d)"
+  tar -xzf "$file" -C "$stage"
+  local idx=0 trn=0 f
+  for f in "$stage/index"/local_*.json; do
+    [ -e "$f" ] || continue
+    [ -e "$acct/$(basename "$f")" ] && continue
+    cp "$f" "$acct/"; idx=$((idx+1))
+  done
+  if [ -d "$stage/transcripts" ]; then
+    ( cd "$stage/transcripts" && find . -name "*.jsonl" ) | while read -r rel; do
+      rel="${rel#./}"; mkdir -p "$HOME/.claude/projects/$(dirname "$rel")"
+      [ -e "$HOME/.claude/projects/$rel" ] || cp "$stage/transcripts/$rel" "$HOME/.claude/projects/$rel"
+    done
+    trn="$(find "$stage/transcripts" -name '*.jsonl' | wc -l | xargs)"
+  fi
+  rm -rf "$stage"
+  info "imported $idx session index file(s), $trn transcript(s)"
+  info "restart the '$name' instance to see them. Sessions reference the original machine's folder paths."
+}
+
+# ---------------------------------------------------------- install / stub
+cmd_install_stub() { # writes a self-locating launcher onto PATH (move-proof)
+  local bindir="$HOME/.local/bin"; mkdir -p "$bindir" "$(dirname "$CONF")"
+  printf '%s' "$SELF" > "$CONF"
+  rm -f "$bindir/multiapp"   # CRITICAL: drop any existing symlink so we don't write through it into the real script
+  cat > "$bindir/multiapp" <<'STUB'
+#!/usr/bin/env bash
+# multiapp launcher stub (move-proof) — resolves the real script dynamically.
+# Generated by `multiapp install-stub`. Do not edit; safe to keep across folder moves.
+set -euo pipefail
+CONF="${XDG_CONFIG_HOME:-$HOME/.config}/multiapp/target"
+target=""; [ -f "$CONF" ] && target="$(cat "$CONF" 2>/dev/null || true)"
+if [ ! -x "$target" ]; then
+  # self-heal after a move: use the OS file index (instant — NOT a recursive find,
+  # which can hang for minutes on large cloud-synced folders).
+  found=""
+  case "$(uname -s)" in
+    Darwin) found="$(mdfind "kMDItemFSName == 'multiapp'" 2>/dev/null | grep -m1 '/Multiapp/prototype/multiapp$' || true)" ;;
+    *) found="$( { command -v plocate >/dev/null 2>&1 && plocate multiapp || locate multiapp; } 2>/dev/null | grep -m1 '/Multiapp/prototype/multiapp$' || true)" ;;
+  esac
+  [ -n "$found" ] && [ -x "$found" ] && { target="$found"; mkdir -p "$(dirname "$CONF")"; printf '%s' "$target" > "$CONF"; }
+fi
+[ -x "$target" ] || { echo "multiapp: real script not found after a move. Run once from its new location:  bash '<new path>/prototype/multiapp' install-stub" >&2; exit 1; }
+exec "$target" "$@"
+STUB
+  chmod +x "$bindir/multiapp"
+  info "installed move-proof launcher → $bindir/multiapp"
+  info "target recorded → $CONF"
+  case ":$PATH:" in *":$bindir:"*) : ;; *) warn "$bindir is not on PATH — add: export PATH=\"$bindir:\$PATH\"";; esac
+}
+
+cmd_doctor() {
+  info "multiapp $VERSION  ($PLATFORM)"
+  info "os:        $(os_version)"
+  info "root:      $ROOT"
+  info "self:      $SELF"
+  info "stub tgt:  $(cat "$CONF" 2>/dev/null || echo '(unset — run: multiapp install-stub)')"
+  info "profiles:  $(find "$PROFILES" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l | xargs)"
+  info "trash:     $(ls "$TRASH" 2>/dev/null | wc -l | xargs) item(s)"
+  local key path missing=0
+  while IFS='|' read -r key path _; do
+    [ -n "$key" ] || continue
+    app_installed "$path" || { info "  missing app: $key ($path)"; missing=1; }
+  done <<< "$REGISTRY"
+  [ "$missing" = 0 ] && info "all registry apps installed"
+}
+
+cmd_help() {
+  cat <<HELP
+multiapp $VERSION — run multiple isolated profiles of desktop apps ($PLATFORM)
+
+usage: multiapp <command> [args]
+
+  apps                          list known apps + support verdicts
+  scan                          discover newly installed Electron/Chromium apps → registry
+  new     <app> <profile>       create a profile
+  launch  <app> <profile> [--] [args]   launch an isolated instance
+  list    [app]                 list profiles (state, size)
+  stop    <app> <profile>       gracefully quit a profile's instance
+  clone   <app> <src> <dst>     duplicate a stopped profile
+  rename  <app> <old> <new>     rename a stopped profile (wrapper regenerated)
+  sessions claude <prof|main>   list Claude Code sessions of a profile ("main" = real app)
+  transfer claude <src> <dst> [sel]   copy chosen sessions between profiles on this machine
+  export  <app> <prof|main> [f] claude: archive chosen sessions (for another machine); others: whole profile
+  import  <app> <prof|main> <f> merge a session archive (claude) / restore whole profile (others)
+  delete  <app> <profile>       move a profile to Multiapp Trash (staged, recoverable)
+  trash   [list|purge]          inspect / empty the staged trash
+  wrapper <app> <profile>       create a clickable launcher (Dock .app / .desktop)
+  probe   <app>                 canary-test whether the app honors the flag
+  install-stub                  put a move-proof 'multiapp' launcher on PATH
+  doctor                        environment self-check
+  help                          this text
+
+mechanism: launch <App> with --user-data-dir=<profile>   (equals form; verified 2026-07-15)
+profiles live in: $PROFILES
+HELP
+}
+
+# ================================================================ dispatch
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  apps)      cmd_apps "$@" ;;
+  scan)      cmd_scan "$@" ;;
+  new)       cmd_new "$@" ;;
+  launch)    cmd_launch "$@" ;;
+  list|ls)   cmd_list "$@" ;;
+  stop)      cmd_stop "$@" ;;
+  clone)     cmd_clone "$@" ;;
+  rename|mv) cmd_rename "$@" ;;
+  sessions)  cmd_sessions "$@" ;;
+  transfer)  cmd_transfer "$@" ;;
+  export)    cmd_export "$@" ;;
+  import)    cmd_import "$@" ;;
+  delete|rm) cmd_delete "$@" ;;
+  trash)     cmd_trash "$@" ;;
+  wrapper)   cmd_wrapper "$@" ;;
+  probe)     cmd_probe "$@" ;;
+  install-stub) cmd_install_stub "$@" ;;
+  doctor)    cmd_doctor "$@" ;;
+  help|--help|-h|version|--version) cmd_help ;;
+  *) die "unknown command '$cmd' — see: multiapp help" ;;
+esac
