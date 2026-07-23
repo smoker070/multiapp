@@ -194,20 +194,20 @@ app_is_running() { # $1 = display name → 0 if running
 }
 
 cmd_migratelist() {
-  printf '%-18s %-14s %-11s %s\n' "APP" "VERDICT" "AUTH" "SAME-MAC BACKUP"
+  local raw=0; [ "${1:-}" = "--raw" ] && raw=1
+  [ "$raw" = 1 ] || printf '%-18s %-14s %-11s %s\n' "APP" "VERDICT" "AUTH" "SAME-MAC BACKUP"
   full_registry | while IFS='|' read -r key path name adapter verdict note; do
     [ -n "$key" ] || continue
     local spec; spec="$(backup_spec "$key" 2>/dev/null)" || { continue; }
-    local v a; v="$(printf '%s' "$spec" | awk '$1=="V"{print $2;exit}')"
-    a="$(printf '%s' "$spec" | awk '$1=="A"{print $2;exit}')"
-    local ok=no; for d in $(printf '%s' "$spec" | awk '$1=="D"{$1="";print substr($0,2)}'); do :; done
-    # existence check on first data path
-    local first; first="$(printf '%s\n' "$spec" | awk '$1=="D"{sub(/^D /,"");print;exit}')"
-    [ -e "$first" ] && ok=yes
-    [ "$ok" = yes ] && printf '%-18s %-14s %-11s %s\n' "$key" "$v" "$a" "backup available"
+    local v a first
+    v="$(printf '%s\n' "$spec" | awk '$1=="V"{print $2;exit}')"
+    a="$(printf '%s\n' "$spec" | awk '$1=="A"{print $2;exit}')"
+    first="$(printf '%s\n' "$spec" | awk '$1=="D"{sub(/^D /,"");print;exit}')"
+    [ -e "$first" ] || continue          # only apps with data present on this machine
+    if [ "$raw" = 1 ]; then printf '%s|%s|%s\n' "$key" "$v" "$a"       # key|verdict|authlocus (for the GUI)
+    else printf '%-18s %-14s %-11s %s\n' "$key" "$v" "$a" "backup available"; fi
   done
-  info ""
-  info "same-machine restore is FULL (login included). moving to another Mac = content + re-login."
+  [ "$raw" = 1 ] || { info ""; info "same-machine restore is FULL (login included). moving to another Mac = content + re-login."; }
 }
 
 cmd_backup() {

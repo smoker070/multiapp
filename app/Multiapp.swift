@@ -71,6 +71,48 @@ struct CLI {
             return App(key: key, display: display, verdict: verdict)
         }
     }
+
+    struct BackupApp { let key: String; let verdict: String; let authLocus: String }
+
+    /// Apps whose real data can be backed up on this machine (from `migrate-list --raw`).
+    static func backupApps() -> [BackupApp] {
+        run(["migrate-list", "--raw"]).out.split(separator: "\n").compactMap {
+            let f = $0.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+            guard f.count >= 3 else { return nil }
+            return BackupApp(key: f[0], verdict: f[1], authLocus: f[2])
+        }
+    }
+
+    static func displayName(_ key: String) -> String {
+        // parse the FULL apps table (all verdicts) — apps() filters out "partial" apps like ChatGPT
+        for line in run(["apps"]).out.split(separator: "\n").dropFirst() {
+            let s = String(line)
+            guard s.count > 21 else { continue }
+            let k = String(s.prefix(20)).trimmingCharacters(in: .whitespaces)
+            if k == key { return String(s.dropFirst(21).prefix(24)).trimmingCharacters(in: .whitespaces) }
+        }
+        return key
+    }
+
+    static func isRunning(app key: String) -> Bool {
+        let disp = displayName(key)
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        p.arguments = ["-e", "application \"\(disp)\" is running"]
+        let pipe = Pipe(); p.standardOutput = pipe; p.standardError = Pipe()
+        do { try p.run() } catch { return false }
+        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        p.waitUntilExit()
+        return out.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
+    }
+
+    static func quit(app key: String) {
+        let disp = displayName(key)
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        p.arguments = ["-e", "tell application \"\(disp)\" to quit"]
+        try? p.run(); p.waitUntilExit()
+    }
 }
 
 // ---------------------------------------------------------------- shared UI helpers
@@ -216,6 +258,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(make("New Profile…", #selector(newProfile(_:))))
         menu.addItem(make("Import Profile…", #selector(importProfile(_:))))
+
+        // Backup & Restore — app-level (real app data), not per-profile
+        let backupItem = NSMenuItem(title: "Back Up & Restore", action: nil, keyEquivalent: "")
+        let backupSub = NSMenu()
+        backupSub.autoenablesItems = false
+        for b in CLI.backupApps() {
+            let disp = CLI.displayName(b.key)
+            let appItem = NSMenuItem(title: b.verdict == "experimental" ? "\(disp)  (experimental)" : disp,
+                                     action: nil, keyEquivalent: "")
+            let appSub = NSMenu()
+            appSub.addItem(make("Back Up…", #selector(backupApp(_:)), rep: b.key))
+            appSub.addItem(make("Restore…", #selector(restoreApp(_:)), rep: b.key))
+            appItem.submenu = appSub
+            backupSub.addItem(appItem)
+        }
+        if backupSub.items.isEmpty {
+            let none = NSMenuItem(title: "no backup-capable apps found", action: nil, keyEquivalent: "")
+            none.isEnabled = false; backupSub.addItem(none)
+        }
+        backupItem.submenu = backupSub
+        menu.addItem(backupItem)
+
         menu.addItem(make("Rescan Installed Apps", #selector(rescan(_:))))
         menu.addItem(.separator())
         let v = NSMenuItem(title: "Multiapp v0.2", action: nil, keyEquivalent: "")
@@ -448,6 +512,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 .joined(separator: "\n")
             self.alertAsync("Scan finished", cleaned)
         }
+    }
+
+    @objc func backupApp(_ s: NSMenuItem) {
+        guard let key = s.representedObject as? String else { return }
+        let disp = CLI.displayName(key)
+        // the app must be quit for a consistent copy — offer to quit it
+        if CLI.isRunning(app: key) {
+            let d = CenteredDialog(title: "Quit \(disp)?",
+                                   message: "\(disp) must be closed for a clean backup. Quit it now?\nSave any unsaved work first.")
+            d.addButton("Quit & Back Up", code: 1, key: "\r")
+            d.addButton("Cancel", code: 2, key: "\u{1b}")
+            guard d.run() == 1 else { return }
+            CLI.quit(app: key)
+        }
+        let panel = NSSavePanel()
+        panel.title = "Back Up \(disp)"
+        panel.nameFieldStringValue = "multiapp-backup-\(key)-\(Self.stamp()).tar.gz"
+        panel.prompt = "Back Up"
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        setBusy(true, "backing up \(disp)…")
+        DispatchQueue.global().async {
+            let r = CLI.run(["backup", key, url.path])
+            let ok = r.code == 0
+            self.setBusy(false)
+            self.alertAsync(ok ? "Backup complete" : "Backup failed",
+                            ok ? (r.out.split(separator: "\n").first(where: { $0.contains("backup written") }).map(String.init) ?? url.path)
+                               : (r.err.isEmpty ? r.out : r.err))
+        }
+    }
+
+    /// Dim the menu-bar icon + set a tooltip while a long op runs (no blocking modal).
+    func setBusy(_ on: Bool, _ note: String = "") {
+        DispatchQueue.main.async {
+            self.statusItem.button?.appearsDisabled = on
+            self.statusItem.button?.toolTip = on ? "Multiapp — \(note)" : nil
+        }
+    }
+
+    @objc func restoreApp(_ s: NSMenuItem) {
+        guard let key = s.representedObject as? String else { return }
+        let disp = CLI.displayName(key)
+        let panel = NSOpenPanel()
+        panel.title = "Restore \(disp) from backup"
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = []
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        if CLI.isRunning(app: key) { CLI.quit(app: key) }
+        let d = CenteredDialog(title: "Restore \(disp)?",
+                               message: "This replaces \(disp)'s current data with the backup.\nYour current data is moved to Multiapp Trash first (recoverable).")
+        d.addButton("Restore", code: 1, key: "\r")
+        d.addButton("Cancel", code: 2, key: "\u{1b}")
+        guard d.run() == 1 else { return }
+        setBusy(true, "restoring \(disp)…")
+        DispatchQueue.global().async {
+            // CLI asks for a typed "RESTORE" confirmation on stdin; we've confirmed in the GUI already
+            let r = CLI.run(["restore", key, url.path], input: "RESTORE\n")
+            let ok = r.code == 0
+            self.setBusy(false)
+            self.alertAsync(ok ? "Restore complete" : "Restore failed",
+                            ok ? "\(disp)'s data was restored. Relaunch it — on this Mac your login is intact too."
+                               : (r.err.isEmpty ? r.out : r.err))
+        }
+    }
+
+    static func stamp() -> String {
+        let f = DateFormatter(); f.dateFormat = "yyyyMMdd-HHmmss"
+        return f.string(from: Date())
     }
 
     @objc func newProfile(_ s: NSMenuItem) {
