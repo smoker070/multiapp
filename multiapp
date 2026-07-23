@@ -154,6 +154,168 @@ assert_inside_root() { # safety: refuse to operate outside our root
   esac
 }
 
+# ================================================================ backup / migrate
+# Same-machine backup & restore of an app's REAL local data (not a profile).
+# Verdicts (see BACKUP-MIGRATE-SPEC): same-machine restore is FULL incl. login because the
+# Keychain is still present; cross-machine migration would move content but not the Keychain-bound
+# login. This build ships the same-machine half only.
+#
+# backup_spec <key> prints tab-rows:  V <verdict>  |  A <authLocus>  |  D <abs data path>  |  X <exclude glob>
+# (X excludes are cache dirs, relative to the parent of each D root; skipped unless --include-cache)
+AS_DIR="$HOME/Library/Application Support"
+backup_spec() {
+  local elec_excludes=$'X Cache\nX Code Cache\nX GPUCache\nX DawnGraphiteCache\nX DawnWebGPUCache\nX Crashpad\nX component_crx_cache'
+  case "$1" in
+    claude)
+      printf 'V full-samemac\nA keychain\nD %s\n%s\nX */vm_bundles\n' "$AS_DIR/Claude" "$elec_excludes" ;;
+    chatgpt)
+      printf 'V full-samemac\nA keychain\nD %s\nD %s\n%s\n' "$AS_DIR/com.openai.chat" "$AS_DIR/Codex" "$elec_excludes" ;;
+    notion)          printf 'V full-samemac\nA keychain\nD %s\n%s\n' "$AS_DIR/Notion" "$elec_excludes" ;;
+    notion-calendar) printf 'V full-samemac\nA keychain\nD %s\n%s\n' "$AS_DIR/Notion Calendar" "$elec_excludes" ;;
+    vscode)          printf 'V full-samemac\nA file\nD %s\n%s\n' "$AS_DIR/Code" "$elec_excludes" ;;
+    github)          printf 'V full-samemac\nA keychain\nD %s\n%s\n' "$AS_DIR/GitHub Desktop" "$elec_excludes" ;;
+    antigravity)     printf 'V full-samemac\nA file\nD %s\n%s\n' "$AS_DIR/Antigravity" "$elec_excludes" ;;
+    antigravity-ide) printf 'V full-samemac\nA file\nD %s\n%s\n' "$AS_DIR/Antigravity IDE" "$elec_excludes" ;;
+    openmtp)         printf 'V full-samemac\nA file\nD %s\n' "$AS_DIR/OpenMTP" ;;
+    google-chrome)   printf 'V full-samemac\nA keychain\nD %s\n%s\n' "$AS_DIR/Google/Chrome" "$elec_excludes" ;;
+    gemini)          printf 'V experimental\nA keychain\nD %s\nD %s\nD %s\n' \
+                       "$AS_DIR/com.google.GeminiMacOS" "$HOME/Library/HTTPStorages/com.google.GeminiMacOS" \
+                       "$HOME/Library/Group Containers/group.com.google.gemini" ;;
+    telegram)        printf 'V experimental\nA keychain\nD %s\nD %s\nX postbox/media\nX account-*/postbox/media\n' \
+                       "$HOME/Library/Containers/ru.keepcoder.Telegram" \
+                       "$HOME/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram" ;;
+    *) return 1 ;;
+  esac
+}
+
+app_is_running() { # $1 = display name → 0 if running
+  local disp; disp="$(reg_field "$1" 3)"; [ -n "$disp" ] || return 1
+  [ "$(osascript -e "application \"$disp\" is running" 2>/dev/null)" = "true" ]
+}
+
+cmd_migratelist() {
+  printf '%-18s %-14s %-11s %s\n' "APP" "VERDICT" "AUTH" "SAME-MAC BACKUP"
+  full_registry | while IFS='|' read -r key path name adapter verdict note; do
+    [ -n "$key" ] || continue
+    local spec; spec="$(backup_spec "$key" 2>/dev/null)" || { continue; }
+    local v a; v="$(printf '%s' "$spec" | awk '$1=="V"{print $2;exit}')"
+    a="$(printf '%s' "$spec" | awk '$1=="A"{print $2;exit}')"
+    local ok=no; for d in $(printf '%s' "$spec" | awk '$1=="D"{$1="";print substr($0,2)}'); do :; done
+    # existence check on first data path
+    local first; first="$(printf '%s\n' "$spec" | awk '$1=="D"{sub(/^D /,"");print;exit}')"
+    [ -e "$first" ] && ok=yes
+    [ "$ok" = yes ] && printf '%-18s %-14s %-11s %s\n' "$key" "$v" "$a" "backup available"
+  done
+  info ""
+  info "same-machine restore is FULL (login included). moving to another Mac = content + re-login."
+}
+
+cmd_backup() {
+  local key="${1:-}" out="" inc=0
+  shift || true
+  while [ $# -gt 0 ]; do case "$1" in --include-cache) inc=1;; *) out="$1";; esac; shift; done
+  [ -n "$key" ] || die "usage: multiapp backup <app> [out.tar.gz] [--include-cache]"
+  local spec; spec="$(backup_spec "$key" 2>/dev/null)" || die "no backup profile for '$key' — see: multiapp migrate-list"
+  app_is_running "$key" && die "'$key' is running — quit it first (a live app makes an inconsistent backup)"
+
+  # collect existing data roots
+  local roots=(); while IFS= read -r line; do
+    case "$line" in "D "*) local p="${line#D }"; [ -e "$p" ] && roots+=("$p");; esac
+  done <<< "$spec"
+  [ "${#roots[@]}" -gt 0 ] || die "no data found on this machine for '$key'"
+
+  local verdict; verdict="$(printf '%s\n' "$spec" | awk '$1=="V"{print $2;exit}')"
+  local locus;   locus="$(printf '%s\n' "$spec" | awk '$1=="A"{print $2;exit}')"
+  local ver;     ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$(reg_field "$key" 2)/Contents/Info.plist" 2>/dev/null || echo unknown)"
+  local desk="$HOME/Desktop"; [ -d "$desk" ] || desk="$HOME"
+  [ -n "$out" ] || out="$desk/multiapp-backup-${key}-$(date +%Y%m%d-%H%M%S).tar.gz"
+
+  # tar excludes (relative patterns) unless --include-cache
+  local exargs=()
+  if [ "$inc" = 0 ]; then
+    while IFS= read -r line; do case "$line" in "X "*) exargs+=(--exclude="${line#X }");; esac; done <<< "$spec"
+  fi
+
+  [ "$verdict" = experimental ] && warn "'$key' backup is EXPERIMENTAL — same-Mac restore should be full, but cross-machine behavior is unverified"
+  warn "this archive will contain your private app data (and, on this Mac, your logged-in session) — keep it safe"
+  [ "$inc" = 0 ] && [ "${#exargs[@]}" -gt 0 ] && info "excluding caches (use --include-cache to keep them)"
+
+  # manifest describing what/where, so restore knows the exact target paths
+  local stage; stage="$(mktemp -d)"
+  {
+    printf '{\n  "multiapp_backup": "1",\n  "app": "%s",\n  "appVersion": "%s",\n  "authLocus": "%s",\n  "verdict": "%s",\n' "$key" "$ver" "$locus" "$verdict"
+    printf '  "sourceHost": "%s",\n  "macOS": "%s",\n  "includedCache": %s,\n  "dataRoots": [\n' \
+      "$(scutil --get ComputerName 2>/dev/null || hostname)" "$(sw_vers -productVersion 2>/dev/null)" "$([ "$inc" = 1 ] && echo true || echo false)"
+    local i=0; for r in "${roots[@]}"; do [ $i -gt 0 ] && printf ',\n'; printf '    "%s"' "$r"; i=1; done
+    printf '\n  ]\n}\n'
+  } > "$stage/manifest.json"
+
+  info "backing up ${#roots[@]} data location(s) for '$key'…"
+  # archive: manifest at top, plus each root stored under payload/<basename>
+  local tarlist=(-C "$stage" manifest.json)
+  local idx=0
+  for r in "${roots[@]}"; do
+    tarlist+=(-C "$(dirname "$r")" "$(basename "$r")")
+  done
+  # ${arr[@]+…} guards empty arrays under macOS bash 3.2 + set -u
+  if tar -czf "$out" ${exargs[@]+"${exargs[@]}"} "${tarlist[@]}" 2>/dev/null; then
+    rm -rf "$stage"
+    info "backup written → $out  ($(du -sh "$out" 2>/dev/null | awk '{print $1}'))"
+    info "restore with:  multiapp restore $key \"$out\""
+  else
+    rm -rf "$stage"; rm -f "$out"; die "backup failed"
+  fi
+}
+
+cmd_restore() {
+  local key="${1:-}" file="${2:-}" force=0
+  [ "${3:-}" = "--force" ] && force=1
+  [ -n "$key" ] && [ -n "$file" ] || die "usage: multiapp restore <app> <archive.tar.gz> [--force]"
+  [ -f "$file" ] || die "no such file: $file"
+  backup_spec "$key" >/dev/null 2>&1 || die "no backup profile for '$key'"
+  # safety: reject absolute / traversal members
+  tar -tzf "$file" 2>/dev/null | grep -qE '(^/|(^|/)\.\.(/|$))' && die "unsafe archive (absolute or ../ paths) — refusing"
+  tar -tzf "$file" 2>/dev/null | grep -q '^manifest.json$' || die "not a Multiapp backup (no manifest)"
+  app_is_running "$key" && die "'$key' is running — quit it first before restoring"
+
+  local tmp; tmp="$(mktemp -d)"
+  tar -xzf "$file" -C "$tmp" 2>/dev/null || { rm -rf "$tmp"; die "cannot extract archive"; }
+  local man="$tmp/manifest.json"
+  local aver; aver="$(/usr/bin/python3 -c "import json;print(json.load(open('$man')).get('appVersion','?'))" 2>/dev/null)"
+  local iver; iver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$(reg_field "$key" 2)/Contents/Info.plist" 2>/dev/null || echo unknown)"
+  [ "$aver" != "$iver" ] && warn "archive is from $key $aver; installed is $iver — restore anyway if you accept possible format drift"
+
+  # map each payload dir back to its recorded absolute destination
+  local -a dests roots
+  while IFS= read -r r; do roots+=("$r"); done < <(/usr/bin/python3 -c "import json;[print(p) for p in json.load(open('$man'))['dataRoots']]" 2>/dev/null)
+  [ "${#roots[@]}" -gt 0 ] || { rm -rf "$tmp"; die "manifest has no dataRoots"; }
+
+  info "will restore into:"; for r in "${roots[@]}"; do info "  ${r/#$HOME/~}"; done
+  if [ "$force" != 1 ]; then
+    printf "Type RESTORE to overwrite the above (current data is moved to Multiapp Trash first): "
+    local a; read -r a; [ "$a" = "RESTORE" ] || { rm -rf "$tmp"; die "aborted"; }
+  fi
+
+  # stage existing data to Trash (recoverable), then move payload into place
+  local bk="$TRASH/restore-backup-$key-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$bk"
+  local restored=0
+  for r in "${roots[@]}"; do
+    local base; base="$(basename "$r")"
+    local payload="$tmp/$base"
+    [ -e "$payload" ] || { warn "archive missing payload for $base — skipped"; continue; }
+    mkdir -p "$(dirname "$r")"
+    [ -e "$r" ] && mv "$r" "$bk/$base"          # stage current → Trash
+    if mv "$payload" "$r"; then restored=$((restored+1))
+    else # rollback this root
+      warn "restore of $base failed — rolling back"; [ -e "$bk/$base" ] && mv "$bk/$base" "$r"
+    fi
+  done
+  rm -rf "$tmp"
+  info "restored $restored data location(s) for '$key'"
+  info "previous data staged at: ${bk/#$HOME/~}  (delete when you're happy, or move back to undo)"
+  info "relaunch $key — you should find your history and (on this same Mac) your login intact"
+}
+
 # ================================================================ commands
 cmd_apps() {
   printf '%-20s %-24s %-11s %s\n' "KEY" "APP" "VERDICT" "NOTE"
@@ -693,6 +855,9 @@ usage: multiapp <command> [args]
   transfer claude <src> <dst> [sel]   copy chosen sessions between profiles on this machine
   export  <app> <prof|main> [f] claude: archive chosen sessions (for another machine); others: whole profile
   import  <app> <prof|main> <f> merge a session archive (claude) / restore whole profile (others)
+  migrate-list                  apps whose real data can be backed up on this machine
+  backup  <app> [out] [--include-cache]   back up an app's REAL data (same-Mac restore = full, incl. login)
+  restore <app> <archive>       restore a backup (quits nothing; stages current data to Trash first)
   delete  <app> <profile>       move a profile to Multiapp Trash (staged, recoverable)
   trash   [list|purge]          inspect / empty the staged trash
   wrapper <app> <profile>       create a clickable launcher (Dock .app / .desktop)
@@ -721,6 +886,9 @@ case "$cmd" in
   transfer)  cmd_transfer "$@" ;;
   export)    cmd_export "$@" ;;
   import)    cmd_import "$@" ;;
+  backup)    cmd_backup "$@" ;;
+  restore)   cmd_restore "$@" ;;
+  migrate-list) cmd_migratelist "$@" ;;
   delete|rm) cmd_delete "$@" ;;
   trash)     cmd_trash "$@" ;;
   wrapper)   cmd_wrapper "$@" ;;

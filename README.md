@@ -44,8 +44,8 @@ Example: a profile named `second` holding a second Claude account —
 ## Commands
 
 `apps · scan · new · launch · list · stop · clone · rename · delete · trash · wrapper · probe ·
-install-stub · doctor · help` — plus Claude-only session ops on macOS/Linux:
-`sessions · transfer · export · import`.
+install-stub · doctor · help` — plus Claude-only session ops (`sessions · transfer · export · import`)
+and app **backup/restore** (`migrate-list · backup · restore`), all on macOS/Linux.
 
 | Command | Notes |
 |---|---|
@@ -55,7 +55,23 @@ install-stub · doctor · help` — plus Claude-only session ops on macOS/Linux:
 | `wrapper` | macOS: `osacompile` applet with the app's icon; Linux: `.desktop`; Windows: Start-Menu `.lnk` |
 | `transfer claude <src> <dst> [sel]` | copy chosen Claude Code sessions between profiles on one machine — a **true copy**: new session ids + duplicated transcript, so the two profiles never share a live session (transcripts live in `~/.claude`, which `--user-data-dir` does not isolate) |
 | `export/import claude` | bundle chosen sessions (index + transcripts) to move to another machine |
+| `migrate-list` | apps whose **real** local data can be backed up on this machine, with a verdict per app |
+| `backup <app> [out] [--include-cache]` | archive an app's real data (quit the app first). Caches excluded by default. **On the same Mac a restore is full — login included** — because the login lives in the Keychain, which stays on this machine |
+| `restore <app> <archive>` | restore a backup: validates the archive, moves current data to `Trash/` first (recoverable), then extracts |
 | `install-stub` | (re)install the move-proof launcher on PATH |
+
+### Backup / restore — what actually moves
+
+An app's **local content** (history, drafts, settings) lives in files and copies cleanly. Its **login**
+lives in the macOS **Keychain**, which is bound to this machine + user and does *not* travel in an
+archive. So:
+
+- **Restore on the same Mac** (after reinstalling the app or macOS) → **everything, login included.**
+- **Move the archive to another Mac** → history and settings arrive; you **sign in once.**
+
+`migrate-list` marks each app `full-samemac` or `experimental` (data locations known, but decrypt-after-
+move to a *different* machine unverified — currently Telegram and Gemini). Multiapp never touches
+Keychain items; that's precisely why logins don't migrate.
 
 ## Storage (per platform)
 
