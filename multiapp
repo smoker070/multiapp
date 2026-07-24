@@ -192,9 +192,12 @@ backup_spec() {
   esac
 }
 
-app_is_running() { # $1 = display name → 0 if running
-  local disp; disp="$(reg_field "$1" 3)"; [ -n "$disp" ] || return 1
-  [ "$(osascript -e "application \"$disp\" is running" 2>/dev/null)" = "true" ]
+app_is_running() { # $1 = registry key → 0 if running
+  # Match the running process by its BUNDLE PATH, not by name. AppleScript's
+  # `application "X" is running` needs Automation permission (which a GUI caller may not have) and
+  # is ambiguous when two apps share an executable name — e.g. ChatGPT vs ChatGPT Classic.
+  local path; path="$(reg_field "$1" 2)"; [ -n "$path" ] || return 1
+  ps -eo args 2>/dev/null | grep -F "$path/Contents/MacOS/" | grep -qv grep
 }
 
 cmd_migratelist() {

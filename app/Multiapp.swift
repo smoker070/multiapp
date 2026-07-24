@@ -99,33 +99,44 @@ struct CLI {
 
     static func displayName(_ key: String) -> String { displayMap()[key] ?? key }
 
-    static func isRunning(app key: String) -> Bool {
+    /// Running check via NSWorkspace — no Automation/TCC permission needed, and matches the exact
+    /// bundle (AppleScript by name is ambiguous: "ChatGPT" vs "ChatGPT Classic").
+    static func runningApp(_ key: String) -> NSRunningApplication? {
         let disp = displayName(key)
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        p.arguments = ["-e", "application \"\(disp)\" is running"]
-        let pipe = Pipe(); p.standardOutput = pipe; p.standardError = Pipe()
-        do { try p.run() } catch { return false }
-        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        p.waitUntilExit()
-        return out.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
+        let wanted = "\(disp).app"
+        return NSWorkspace.shared.runningApplications.first {
+            $0.bundleURL?.lastPathComponent == wanted
+        }
     }
 
-    /// Quit the app AND wait until it is actually gone. osascript's `quit` only *sends* the event —
-    /// it returns before the app has fully exited, so a backup started right after would still see it
-    /// running and be refused. Poll up to ~12 s. Returns true if the app is confirmed not running.
+    static func isRunning(app key: String) -> Bool { runningApp(key) != nil }
+
+    /// Quit the app AND wait until it is really gone. Uses NSRunningApplication.terminate() (a polite
+    /// quit that needs no Automation permission — unlike osascript, which an ad-hoc-signed app may be
+    /// denied). Never force-kills: unsaved work is the user's, not ours.
     @discardableResult
     static func quit(app key: String) -> Bool {
-        let disp = displayName(key)
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        p.arguments = ["-e", "tell application \"\(disp)\" to quit"]
-        try? p.run(); p.waitUntilExit()
+        guard let running = runningApp(key) else { return true }   // already gone
+        running.terminate()
         for _ in 0..<24 {                       // 24 × 0.5 s = 12 s
             if !isRunning(app: key) { return true }
             Thread.sleep(forTimeInterval: 0.5)
         }
         return !isRunning(app: key)
+    }
+
+    /// Append a line to ~/Library/Logs/Multiapp.log so failures are diagnosable, not guessed at.
+    static func log(_ msg: String) {
+        let path = NSHomeDirectory() + "/Library/Logs/Multiapp.log"
+        let f = ISO8601DateFormatter()
+        let line = "[\(f.string(from: Date()))] \(msg)\n"
+        if let data = line.data(using: .utf8) {
+            if let h = FileHandle(forWritingAtPath: path) {
+                h.seekToEndOfFile(); h.write(data); h.closeFile()
+            } else {
+                try? data.write(to: URL(fileURLWithPath: path))
+            }
+        }
     }
 }
 
@@ -552,6 +563,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setBusy(true, "backing up \(disp)…")
         DispatchQueue.global().async {
             if mustQuit, !CLI.quit(app: key) {           // quit AND wait until it's actually gone
+                CLI.log("backup \(key): app still running after quit request")
                 self.setBusy(false)
                 self.alertAsync("Couldn't back up \(disp)", "\(disp) is still running — please quit it manually and try again.")
                 return
@@ -559,9 +571,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let r = CLI.run(["backup", key, url.path])
             let ok = r.code == 0
             self.setBusy(false)
+            if !ok {
+                CLI.log("backup \(key) FAILED (exit \(r.code)) → \(url.path)\n  stdout: \(r.out)\n  stderr: \(r.err)")
+            }
             self.alertAsync(ok ? "Backup complete" : "Backup failed",
                             ok ? (r.out.split(separator: "\n").first(where: { $0.contains("backup written") }).map(String.init) ?? url.path)
-                               : (r.err.isEmpty ? r.out : r.err))
+                               : ((r.err.isEmpty ? r.out : r.err) + "\n\n(details in ~/Library/Logs/Multiapp.log)"))
         }
     }
 
@@ -601,6 +616,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let r = CLI.run(["restore", key, url.path], input: "RESTORE\n")
             let ok = r.code == 0
             self.setBusy(false)
+            if !ok { CLI.log("restore \(key) FAILED (exit \(r.code))\n  stdout: \(r.out)\n  stderr: \(r.err)") }
             self.alertAsync(ok ? "Restore complete" : "Restore failed",
                             ok ? "\(disp)'s data was restored. Relaunch it — if this Mac's Keychain is unchanged, your login should still work; otherwise sign in once."
                                : (r.err.isEmpty ? r.out : r.err))
