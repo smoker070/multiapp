@@ -111,12 +111,21 @@ struct CLI {
         return out.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
     }
 
-    static func quit(app key: String) {
+    /// Quit the app AND wait until it is actually gone. osascript's `quit` only *sends* the event —
+    /// it returns before the app has fully exited, so a backup started right after would still see it
+    /// running and be refused. Poll up to ~12 s. Returns true if the app is confirmed not running.
+    @discardableResult
+    static func quit(app key: String) -> Bool {
         let disp = displayName(key)
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         p.arguments = ["-e", "tell application \"\(disp)\" to quit"]
         try? p.run(); p.waitUntilExit()
+        for _ in 0..<24 {                       // 24 × 0.5 s = 12 s
+            if !isRunning(app: key) { return true }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        return !isRunning(app: key)
     }
 }
 
@@ -523,14 +532,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func backupApp(_ s: NSMenuItem) {
         guard let key = s.representedObject as? String else { return }
         let disp = CLI.displayName(key)
-        // the app must be quit for a consistent copy — offer to quit it
+        // decide on quit up front (confirmation is quick); the actual quit-and-wait happens in the
+        // background so the 12 s wait never freezes the menu-bar UI
+        var mustQuit = false
         if CLI.isRunning(app: key) {
             let d = CenteredDialog(title: "Quit \(disp)?",
                                    message: "\(disp) must be closed for a clean backup. Quit it now?\nSave any unsaved work first.")
             d.addButton("Quit & Back Up", code: 1, key: "\r")
             d.addButton("Cancel", code: 2, key: "\u{1b}")
             guard d.run() == 1 else { return }
-            CLI.quit(app: key)
+            mustQuit = true
         }
         let panel = NSSavePanel()
         panel.title = "Back Up \(disp)"
@@ -540,6 +551,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         setBusy(true, "backing up \(disp)…")
         DispatchQueue.global().async {
+            if mustQuit, !CLI.quit(app: key) {           // quit AND wait until it's actually gone
+                self.setBusy(false)
+                self.alertAsync("Couldn't back up \(disp)", "\(disp) is still running — please quit it manually and try again.")
+                return
+            }
             let r = CLI.run(["backup", key, url.path])
             let ok = r.code == 0
             self.setBusy(false)
@@ -568,7 +584,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        if CLI.isRunning(app: key) { CLI.quit(app: key) }
+        let wasRunning = CLI.isRunning(app: key)
         let d = CenteredDialog(title: "Restore \(disp)?",
                                message: "This replaces \(disp)'s current data with the backup.\nYour current data is moved to Multiapp Trash first (recoverable).")
         d.addButton("Restore", code: 1, key: "\r")
@@ -576,6 +592,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard d.run() == 1 else { return }
         setBusy(true, "restoring \(disp)…")
         DispatchQueue.global().async {
+            if wasRunning, !CLI.quit(app: key) {          // quit AND wait until actually gone
+                self.setBusy(false)
+                self.alertAsync("Couldn't restore \(disp)", "\(disp) is still running — please quit it manually and try again.")
+                return
+            }
             // CLI asks for a typed "RESTORE" confirmation on stdin; we've confirmed in the GUI already
             let r = CLI.run(["restore", key, url.path], input: "RESTORE\n")
             let ok = r.code == 0
