@@ -357,8 +357,11 @@ import json;d=json.load(open('$man'))
     local slug; slug="$(printf '%s' "$rel" | tr '/' '_')"   # flat, collision-free staging name
     mkdir -p "$(dirname "$dest")"
     if [ "$merge" = 1 ] && [ -d "$payload" ] && [ -d "$dest" ]; then
-      # overlay: overwrite files present in the archive, keep everything else (e.g. media caches)
-      if cp -R "$payload"/. "$dest"/ 2>/dev/null; then restored=$((restored+1))
+      # overlay: overwrite files present in the archive, keep everything else (e.g. media caches).
+      # ditto is the macOS-native merge — preserves ACLs/xattrs/resource forks that matter for
+      # sandboxed containers and SQLite stores; cp -R is the fallback.
+      if ditto "$payload" "$dest" 2>/dev/null || cp -R "$payload"/. "$dest"/ 2>/dev/null; then
+        restored=$((restored+1))
       else warn "merge into ~/$rel failed"; fi
     else
       [ -e "$dest" ] && mv "$dest" "$bk/$slug"              # stage current → Trash, then replace
