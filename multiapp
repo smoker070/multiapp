@@ -320,7 +320,7 @@ cmd_restore() {
   rm -rf "$tmp"
   info "restored $restored data location(s) for '$key'"
   info "previous data staged at: ${bk/#$HOME/~}  (delete when you're happy, or move back to undo)"
-  info "relaunch $key — you should find your history and (on this same Mac) your login intact"
+  info "relaunch $key — your history is back; the login works too if this Mac's Keychain is unchanged"
 }
 
 # ================================================================ commands

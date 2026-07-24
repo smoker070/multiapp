@@ -62,12 +62,25 @@ and app **backup/restore** (`migrate-list · backup · restore`), all on macOS/L
 
 ### Backup / restore — what actually moves
 
-An app's **local content** (history, drafts, settings) lives in files and copies cleanly. Its **login**
-lives in the macOS **Keychain**, which is bound to this machine + user and does *not* travel in an
-archive. So:
+**Local content** (history, drafts, settings) is plain files → copies perfectly.
 
-- **Restore on the same Mac** (after reinstalling the app or macOS) → **everything, login included.**
-- **Move the archive to another Mac** → history and settings arrive; you **sign in once.**
+**Login** is different, and the detail matters:
+
+| App type | What the archive holds | Verified |
+|---|---|---|
+| Electron/Chromium (Claude, Notion, ChatGPT, Chrome, VS Code) | the session files (`Cookies`, `Local State`, `Local Storage`, `IndexedDB`) — but the cookies are **encrypted** (`v10` prefix) with a key that lives in the **Keychain**, which is *not* in the archive | ✅ inspected |
+| Native (ChatGPT Classic, Gemini, Telegram) | **no session files at all** — the auth token lives only in the Keychain | ✅ inspected |
+
+Either way the login is only usable where its **Keychain** is:
+
+- **Restore on this Mac with the Keychain intact** (e.g. you reinstalled *the app*) → history **and**
+  login work — not because the archive carries the login, but because the Keychain never left.
+- **Fresh macOS install, another Mac, or another user** → the Keychain is gone, so encrypted cookies
+  can't be decrypted and tokens are absent → history and settings restore, **you sign in once**.
+
+⚠️ "Same machine" is not the same as "same Keychain". Erasing the Mac and reinstalling macOS wipes the
+login keychain too, so that case behaves like a new machine unless you also restore the Keychain
+(Migration Assistant / Time Machine do that; Multiapp deliberately never touches Keychain items).
 
 `migrate-list` marks each app `full-samemac` or `experimental` (data locations known, but decrypt-after-
 move to a *different* machine unverified — currently Telegram and Gemini). Multiapp never touches

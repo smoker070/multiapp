@@ -602,7 +602,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let ok = r.code == 0
             self.setBusy(false)
             self.alertAsync(ok ? "Restore complete" : "Restore failed",
-                            ok ? "\(disp)'s data was restored. Relaunch it — on this Mac your login is intact too."
+                            ok ? "\(disp)'s data was restored. Relaunch it — if this Mac's Keychain is unchanged, your login should still work; otherwise sign in once."
                                : (r.err.isEmpty ? r.out : r.err))
         }
     }
