@@ -417,8 +417,11 @@ session_paths() { # $1 = .app path → absolute paths of login-bearing data that
   for n in "$(plist_get "$app" CFBundleName)" "$(basename "$app" .app)" "$bid"; do
     [ -n "$n" ] || continue
     d="$AS_DIR/$n"
-    [ -d "$d" ] && { [ -e "$d/Local State" ] || [ -e "$d/Cookies" ] || [ -e "$d/Network" ]; } || continue
-    for p in "Cookies" "Cookies-journal" "Local State" "Local Storage" "Session Storage" "IndexedDB" "Network"; do
+    # some vendors nest the data dir (Chrome lives in "Google/Chrome") — look one level down too
+    [ -d "$d" ] || d="$(find "$AS_DIR" -maxdepth 2 -type d -name "$n" 2>/dev/null | head -1)"
+    [ -n "$d" ] && [ -d "$d" ] && { [ -e "$d/Local State" ] || [ -e "$d/Cookies" ] || [ -e "$d/Network" ] || [ -d "$d/Default" ]; } || continue
+    for p in "Cookies" "Cookies-journal" "Local State" "Local Storage" "Session Storage" "IndexedDB" "Network" \
+             "Default/Cookies" "Default/Local Storage" "Default/Session Storage" "Default/Network"; do
       [ -e "$d/$p" ] && printf '%s\n' "$d/$p"
     done
     break
@@ -439,24 +442,44 @@ session_paths() { # $1 = .app path → absolute paths of login-bearing data that
   done
 }
 
-session_portability() { # $1 = .app path → "same-mac-only" | "maybe-portable" | "none"
+session_portability() { # $1 = .app path → keychain-only | same-mac-only | maybe-portable | none
+  # Order matters. A Chromium cookie store IS the session (the Keychain only holds the key that
+  # decrypts it), so saving/restoring the files genuinely restores the login on this Mac.
+  # A native app with keychain-access-groups keeps the TOKEN ITSELF in the Keychain — its web-storage
+  # files are not the login at all. Proven on Gemini (2026-07-25): deleting every session file left it
+  # still signed in, because the Keychain was untouched.
   local app="$1" bid n hit ck
   bid="$(plist_get "$app" CFBundleIdentifier)"
   n="$(plist_get "$app" CFBundleName)"; [ -n "$n" ] || n="$(basename "$app" .app)"
-  # a "<App> Safe Storage" keychain item means cookies are encrypted with a Keychain-held key
-  security find-generic-password -s "$n Safe Storage" >/dev/null 2>&1 && { printf 'same-mac-only'; return; }
-  # an app that declares keychain-access-groups keeps its token in the Keychain (e.g. ChatGPT Classic)
-  codesign -d --entitlements :- "$app" 2>/dev/null | grep -q "keychain-access-groups" && { printf 'same-mac-only'; return; }
-  # or Chromium cookies carrying the v10/v11 OS-encryption marker
-  ck="$AS_DIR/$n/Cookies"; [ -f "$ck" ] || ck="$AS_DIR/$n/Network/Cookies"
-  if [ -f "$ck" ]; then
+  # find the cookie store from the paths we actually collected (handles Chromium profile dirs like
+  # Google/Chrome/Default/Cookies and Gecko's Profiles/*/cookies.sqlite, which fixed guesses missed)
+  ck=""
+  local sp
+  while IFS= read -r sp; do
+    [ -n "$sp" ] || continue
+    case "$sp" in
+      */Cookies|*/cookies.sqlite) [ -f "$sp" ] && { ck="$sp"; break; };;
+    esac
+    if [ -d "$sp" ]; then
+      local found; found="$(find "$sp" -maxdepth 3 \( -name Cookies -o -name cookies.sqlite \) -type f 2>/dev/null | head -1)"
+      [ -n "$found" ] && { ck="$found"; break; }
+    fi
+  done < <(session_paths "$app" 2>/dev/null)
+  if [ -n "$ck" ] && [ -f "$ck" ]; then
+    # scan the WHOLE cookie table, not a sample: an empty store or a first page of unencrypted
+    # cookies says nothing (this produced two wrong verdicts before)
     hit="$(/usr/bin/python3 -c "
-import sqlite3,shutil,tempfile,os,sys
+import sqlite3,shutil,tempfile,os
 t=tempfile.mktemp()
 try:
     shutil.copy('$ck',t); c=sqlite3.connect(t)
-    r=c.execute('select encrypted_value from cookies limit 20').fetchall(); c.close()
-    print('enc' if any(x[0][:3] in (b'v10',b'v11') for x in r if x[0]) else 'plain')
+    try:      # Chromium: encrypted_value blob carries a v10/v11 prefix when OS-encrypted
+        r=[x[0] for x in c.execute('select encrypted_value from cookies').fetchall() if x[0]]
+        v='empty' if not r else ('enc' if any(b[:3] in (b'v10',b'v11') for b in r) else 'plain')
+    except sqlite3.OperationalError:   # Gecko: moz_cookies stores values in the clear
+        n=c.execute('select count(*) from moz_cookies').fetchone()[0]
+        v='plain' if n else 'empty'
+    c.close(); print(v)
 except Exception: print('unknown')
 finally:
     try: os.unlink(t)
@@ -464,7 +487,10 @@ finally:
     [ "$hit" = enc ] && { printf 'same-mac-only'; return; }
     [ "$hit" = plain ] && { printf 'maybe-portable'; return; }
   fi
-  [ -n "$(session_paths "$app")" ] && printf 'maybe-portable' || printf 'none'
+  # No usable cookie evidence. A "Safe Storage" item alone does NOT mean the login is in these files —
+  # Gemini has one yet stayed signed in after every session file was deleted (verified 2026-07-25).
+  codesign -d --entitlements :- "$app" 2>/dev/null | grep -q "keychain-access-groups" && { printf 'keychain-only'; return; }
+  [ -n "$(session_paths "$app")" ] && printf 'unknown' || printf 'none'
 }
 
 cmd_session_backup() {
@@ -710,10 +736,19 @@ cmd_session_check() {
   info "$disp — login/session data found: ${#paths[@]:-0} item(s)"
   local p; for p in ${paths[@]+"${paths[@]}"}; do info "  ~/${p#$HOME/}"; done
   case "$(session_portability "$app")" in
-    same-mac-only)  info "portability: THIS MAC ONLY (session is Keychain-encrypted)";;
-    maybe-portable) info "portability: possibly portable to another Mac — unverified, test before relying on it";;
-    none)           info "portability: no session files — this app's login lives only in the Keychain";;
+    same-mac-only)  info "login: encrypted cookies found → these files ARE the session."
+                    info "       Restoring them signs you back in on THIS Mac (the key stays in its Keychain).";;
+    keychain-only)  info "login: likely NOT in these files — the app declares a Keychain token."
+                    info "       Backing them up probably won't preserve a login (Gemini behaves this way).";;
+    maybe-portable) info "login: unencrypted cookies found → these files are the session and may even"
+                    info "       work on another Mac. Unverified — test before relying on it.";;
+    unknown)        info "login: can't tell from the files (no readable cookie store)."
+                    info "       Only the destroy-and-restore test below settles it.";;
+    none)           info "login: no session files at all — the login lives only in the Keychain";;
   esac
+  info ""
+  info "these verdicts are a heuristic. to KNOW: quit the app, session-backup, delete the files above,"
+  info "launch (still signed in? then the files aren't the login), then session-restore and relaunch."
 }
 
 # ================================================================ commands
