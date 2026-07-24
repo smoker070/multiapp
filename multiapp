@@ -168,8 +168,10 @@ backup_spec() {
   case "$1" in
     claude)
       printf 'V full-samemac\nA keychain\nD %s\n%s\nX */vm_bundles\n' "$AS_DIR/Claude" "$elec_excludes" ;;
-    chatgpt)
-      printf 'V full-samemac\nA keychain\nD %s\nD %s\n%s\n' "$AS_DIR/com.openai.chat" "$AS_DIR/Codex" "$elec_excludes" ;;
+    chatgpt)          # the NEW ChatGPT (com.openai.codex) = Chromium data in Codex/
+      printf 'V full-samemac\nA keychain\nD %s\nD %s\n%s\n' "$AS_DIR/Codex" "$AS_DIR/com.openai.codex" "$elec_excludes" ;;
+    chatgpt-classic)  # the pre-merge native ChatGPT (com.openai.chat) — separate app, separate account
+      printf 'V full-samemac\nA keychain\nD %s\n' "$AS_DIR/com.openai.chat" ;;
     notion)          printf 'V full-samemac\nA keychain\nD %s\n%s\n' "$AS_DIR/Notion" "$elec_excludes" ;;
     notion-calendar) printf 'V full-samemac\nA keychain\nD %s\n%s\n' "$AS_DIR/Notion Calendar" "$elec_excludes" ;;
     vscode)          printf 'V full-samemac\nA file\nD %s\n%s\n' "$AS_DIR/Code" "$elec_excludes" ;;
@@ -181,8 +183,10 @@ backup_spec() {
     gemini)          printf 'V experimental\nA keychain\nD %s\nD %s\nD %s\n' \
                        "$AS_DIR/com.google.GeminiMacOS" "$HOME/Library/HTTPStorages/com.google.GeminiMacOS" \
                        "$HOME/Library/Group Containers/group.com.google.gemini" ;;
-    telegram)        printf 'V experimental\nA keychain\nD %s\nD %s\nX postbox/media\nX account-*/postbox/media\n' \
-                       "$HOME/Library/Containers/ru.keepcoder.Telegram" \
+    telegram)        # back up the container's Data (the app's real home) — the container root holds a
+                     # system-protected .com.apple.containermanagerd.metadata.plist that tar can't read
+                     printf 'V experimental\nA keychain\nD %s\nD %s\nX postbox/media\n' \
+                       "$HOME/Library/Containers/ru.keepcoder.Telegram/Data" \
                        "$HOME/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram" ;;
     *) return 1 ;;
   esac
@@ -231,7 +235,8 @@ cmd_backup() {
   [ -n "$out" ] || out="$desk/multiapp-backup-${key}-$(date +%Y%m%d-%H%M%S).tar.gz"
 
   # tar excludes (relative patterns) unless --include-cache
-  local exargs=()
+  # always skip macOS' system-protected sandbox metadata (tar can't read it → would abort the backup)
+  local exargs=(--exclude=".com.apple.containermanagerd.metadata.plist")
   if [ "$inc" = 0 ]; then
     while IFS= read -r line; do case "$line" in "X "*) exargs+=(--exclude="${line#X }");; esac; done <<< "$spec"
   fi
@@ -257,13 +262,15 @@ cmd_backup() {
   for r in "${roots[@]}"; do
     tarlist+=(-C "$(dirname "$r")" "$(basename "$r")")
   done
-  # ${arr[@]+…} guards empty arrays under macOS bash 3.2 + set -u
-  if tar -czf "$out" ${exargs[@]+"${exargs[@]}"} "${tarlist[@]}" 2>/dev/null; then
-    rm -rf "$stage"
+  # ${arr[@]+…} guards empty arrays under macOS bash 3.2 + set -u; capture tar's error for diagnosis
+  local terr; terr="$(mktemp)"
+  if tar -czf "$out" ${exargs[@]+"${exargs[@]}"} "${tarlist[@]}" 2>"$terr"; then
+    rm -rf "$stage" "$terr"
     info "backup written → $out  ($(du -sh "$out" 2>/dev/null | awk '{print $1}'))"
     info "restore with:  multiapp restore $key \"$out\""
   else
-    rm -rf "$stage"; rm -f "$out"; die "backup failed"
+    local why; why="$(grep -v 'Error exit delayed' "$terr" | head -2 | tr '\n' ' ')"
+    rm -rf "$stage" "$terr"; rm -f "$out"; die "backup failed: ${why:-tar error}"
   fi
 }
 

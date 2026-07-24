@@ -83,16 +83,21 @@ struct CLI {
         }
     }
 
-    static func displayName(_ key: String) -> String {
-        // parse the FULL apps table (all verdicts) — apps() filters out "partial" apps like ChatGPT
+    /// key → display for ALL apps in one shot (one subprocess). apps() filters "partial" apps out,
+    /// so the backup menu must use this, not apps(). Cache it so a menu rebuild spawns 1 process, not N.
+    static func displayMap() -> [String: String] {
+        var m: [String: String] = [:]
         for line in run(["apps"]).out.split(separator: "\n").dropFirst() {
             let s = String(line)
             guard s.count > 21 else { continue }
             let k = String(s.prefix(20)).trimmingCharacters(in: .whitespaces)
-            if k == key { return String(s.dropFirst(21).prefix(24)).trimmingCharacters(in: .whitespaces) }
+            let d = String(s.dropFirst(21).prefix(24)).trimmingCharacters(in: .whitespaces)
+            if !k.isEmpty { m[k] = d.isEmpty ? k : d }
         }
-        return key
+        return m
     }
+
+    static func displayName(_ key: String) -> String { displayMap()[key] ?? key }
 
     static func isRunning(app key: String) -> Bool {
         let disp = displayName(key)
@@ -263,8 +268,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let backupItem = NSMenuItem(title: "Back Up & Restore", action: nil, keyEquivalent: "")
         let backupSub = NSMenu()
         backupSub.autoenablesItems = false
+        let names = CLI.displayMap()          // one subprocess for all names (was one per app → slow)
         for b in CLI.backupApps() {
-            let disp = CLI.displayName(b.key)
+            let disp = names[b.key] ?? b.key
             let appItem = NSMenuItem(title: b.verdict == "experimental" ? "\(disp)  (experimental)" : disp,
                                      action: nil, keyEquivalent: "")
             let appSub = NSMenu()
