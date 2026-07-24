@@ -187,8 +187,10 @@ backup_spec() {
       printf 'V full-samemac\nA keychain\nD %s\n%s\nX */vm_bundles\n' "$AS_DIR/Claude" "$elec_excludes" ;;
     chatgpt)          # the NEW ChatGPT (com.openai.codex) = Chromium data in Codex/
       printf 'V full-samemac\nA keychain\nD %s\nD %s\n%s\n' "$AS_DIR/Codex" "$AS_DIR/com.openai.codex" "$elec_excludes" ;;
-    chatgpt-classic)  # the pre-merge native ChatGPT (com.openai.chat) — separate app, separate account
-      printf 'V full-samemac\nA keychain\nD %s\n' "$AS_DIR/com.openai.chat" ;;
+    # chatgpt-classic: removed from the backup list on request — repeated GUI failures the user hit
+    # were never reproducible from the CLI, so the verdict couldn't be trusted. Its data is still
+    # reachable through the generic paths: `multiapp app-export "ChatGPT Classic"` and
+    # `multiapp session-backup "ChatGPT Classic"` both work.
     notion)          printf 'V full-samemac\nA keychain\nD %s\n%s\n' "$AS_DIR/Notion" "$elec_excludes" ;;
     notion-calendar) printf 'V full-samemac\nA keychain\nD %s\n%s\n' "$AS_DIR/Notion Calendar" "$elec_excludes" ;;
     vscode)          printf 'V full-samemac\nA file\nD %s\n%s\n' "$AS_DIR/Code" "$elec_excludes" ;;
@@ -339,22 +341,35 @@ import json;d=json.load(open('$man'))
     local a; read -r a; [ "$a" = "RESTORE" ] || { rm -rf "$tmp"; die "aborted"; }
   fi
 
-  # stage existing data to Trash (recoverable), then move payload into place
+  # Did this archive exclude caches? If so we must MERGE, never replace: the archive is an incomplete
+  # copy of the directory, so moving it over the live data would DELETE everything that was excluded.
+  # (Found the hard way: a Telegram restore cut its group container from 18,918 files to 521.)
+  local incache; incache="$(/usr/bin/python3 -c "import json;print(json.load(open('$man')).get('includedCache',True))" 2>/dev/null)"
+  local merge=0; [ "$incache" = "False" ] || [ "$incache" = "false" ] && merge=1
+
   local bk="$TRASH/restore-backup-$key-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$bk"
+  [ "$merge" = 1 ] && info "archive was made without caches → merging into existing data (nothing is deleted)"
   local restored=0
   for rel in "${rels[@]}"; do
     local dest="$HOME/$rel"
     local payload="$tmp/$rel"
     [ -e "$payload" ] || { warn "archive has no payload for ~/$rel — skipped"; continue; }
     local slug; slug="$(printf '%s' "$rel" | tr '/' '_')"   # flat, collision-free staging name
-    mkdir -p "$(dirname "$dest")" "$bk"
-    [ -e "$dest" ] && mv "$dest" "$bk/$slug"                # stage current → Trash
-    if mv "$payload" "$dest"; then restored=$((restored+1))
+    mkdir -p "$(dirname "$dest")"
+    if [ "$merge" = 1 ] && [ -d "$payload" ] && [ -d "$dest" ]; then
+      # overlay: overwrite files present in the archive, keep everything else (e.g. media caches)
+      if cp -R "$payload"/. "$dest"/ 2>/dev/null; then restored=$((restored+1))
+      else warn "merge into ~/$rel failed"; fi
     else
-      warn "restore of ~/$rel failed — rolling back"; [ -e "$bk/$slug" ] && mv "$bk/$slug" "$dest"
+      [ -e "$dest" ] && mv "$dest" "$bk/$slug"              # stage current → Trash, then replace
+      if mv "$payload" "$dest"; then restored=$((restored+1))
+      else
+        warn "restore of ~/$rel failed — rolling back"; [ -e "$bk/$slug" ] && mv "$bk/$slug" "$dest"
+      fi
     fi
   done
   rm -rf "$tmp"
+  rmdir "$bk" 2>/dev/null || true    # nothing staged (pure merge) → don't leave an empty folder
   info "restored $restored data location(s) for '$key'"
   info "previous data staged at: ${bk/#$HOME/~}  (delete when you're happy, or move back to undo)"
   info "relaunch $key — your history is back; the login works too if this Mac's Keychain is unchanged"
