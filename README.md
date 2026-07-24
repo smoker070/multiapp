@@ -55,6 +55,8 @@ and app **backup/restore** (`migrate-list · backup · restore`), all on macOS/L
 | `wrapper` | macOS: `osacompile` applet with the app's icon; Linux: `.desktop`; Windows: Start-Menu `.lnk` |
 | `transfer claude <src> <dst> [sel]` | copy chosen Claude Code sessions between profiles on one machine — a **true copy**: new session ids + duplicated transcript, so the two profiles never share a live session (transcripts live in `~/.claude`, which `--user-data-dir` does not isolate) |
 | `export/import claude` | bundle chosen sessions (index + transcripts) to move to another machine |
+| `app-export <app> [dir]` / `app-import <archive>` | export/import **any** installed app's local data (work sessions, settings) — not just profile-capable ones. Looks in `~/Library` **and** home dotfolders (`~/.codex`, `~/.claude`) where CLI-style apps actually keep sessions. Import **merges**: it never deletes files the archive omitted |
+| `session-check / session-backup / session-restore <app>` | save and put back just the **login session** (KB-sized). `session-check` says whether that login could survive a move to another Mac |
 | `migrate-list` | apps whose **real** local data can be backed up on this machine, with a verdict per app |
 | `backup <app> [out] [--include-cache]` | archive an app's real data (quit the app first). Caches excluded by default. **On the same Mac a restore is full — login included** — because the login lives in the Keychain, which stays on this machine |
 | `restore <app> <archive>` | restore a backup: validates the archive, moves current data to `Trash/` first (recoverable), then extracts |

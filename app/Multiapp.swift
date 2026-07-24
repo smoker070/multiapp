@@ -334,6 +334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(backupItem)
 
         menu.addItem(make("Export App Data…", #selector(exportAppData(_:))))
+        menu.addItem(make("Import App Data…", #selector(importAppData(_:))))
         menu.addItem(make("Rescan Installed Apps", #selector(rescan(_:))))
         menu.addItem(.separator())
         let v = NSMenuItem(title: "Multiapp v0.2", action: nil, keyEquivalent: "")
@@ -606,6 +607,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.alertAsync(ok ? "Export complete" : "Export failed",
                             ok ? ((r.out.split(separator: "\n").first(where: { $0.contains("exported →") }).map(String.init)
                                    ?? dir.path) + "\n\nThis archive holds your app data — keep it private.")
+                               : ((r.err.isEmpty ? r.out : r.err) + "\n\n(details in ~/Library/Logs/Multiapp.log)"))
+        }
+    }
+
+    /// Import an app-export archive back. The archive names its own app, so there's nothing to pick.
+    @objc func importAppData(_ s: NSMenuItem) {
+        let panel = NSOpenPanel()
+        panel.title = "Import App Data"
+        panel.message = "Choose a Multiapp export archive (.tar.gz)"
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Import"
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let d = CenteredDialog(title: "Import App Data",
+                               message: "Write this archive's data back.\nNothing is deleted — files it doesn't contain (like caches) are kept, and anything replaced is staged to Multiapp Trash.")
+        d.addButton("Import", code: 1, key: "\r")
+        d.addButton("Cancel", code: 2, key: "\u{1b}")
+        guard d.run() == 1 else { return }
+
+        setBusy(true, "importing…")
+        DispatchQueue.global().async {
+            // the CLI asks for a typed IMPORT confirmation; the GUI already confirmed
+            let r = CLI.run(["app-import", url.path], input: "IMPORT\n")
+            let ok = r.code == 0
+            self.setBusy(false)
+            if !ok { CLI.log("app-import FAILED (exit \(r.code)) → \(url.path)\n  stdout: \(r.out)\n  stderr: \(r.err)") }
+            let summary = r.out.split(separator: "\n")
+                .filter { $0.contains("archive:") || $0.contains("imported") || $0.contains("still running") }
+                .joined(separator: "\n")
+            self.alertAsync(ok ? "Import complete" : "Import failed",
+                            ok ? (summary.isEmpty ? "Data imported." : summary)
                                : ((r.err.isEmpty ? r.out : r.err) + "\n\n(details in ~/Library/Logs/Multiapp.log)"))
         }
     }

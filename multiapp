@@ -625,6 +625,72 @@ cmd_app_export() {
   fi
 }
 
+cmd_app_import() {
+  local file="${1:-}" force=0
+  [ "${2:-}" = "--force" ] && force=1
+  [ -n "$file" ] || die "usage: multiapp app-import <archive.tar.gz> [--force]"
+  [ -f "$file" ] || die "no such file: $file"
+  tar -tzf "$file" 2>/dev/null | grep -qE '(^/|(^|/)\.\.(/|$))' && die "unsafe archive (absolute or ../ paths) — refusing"
+  tar -tzf "$file" 2>/dev/null | grep -q '^manifest.json$' || die "not a Multiapp archive (no manifest)"
+
+  local tmp; tmp="$(mktemp -d)"
+  tar -xzf "$file" -C "$tmp" 2>/dev/null || { rm -rf "$tmp"; die "cannot extract archive"; }
+  local man="$tmp/manifest.json"
+  local meta; meta="$(/usr/bin/python3 -c "
+import json;d=json.load(open('$man'))
+print(d.get('app',''));print(d.get('appVersion','?'));print(d.get('sourceHost','?'))
+print('yes' if d.get('includedCache') in (True,'true','True') else 'no')
+print('\n'.join(d.get('paths') or d.get('dataRootsRel') or []))" 2>/dev/null)"
+  local disp ver host incache
+  disp="$(printf '%s\n' "$meta" | sed -n 1p)"
+  ver="$(printf '%s\n' "$meta" | sed -n 2p)"
+  host="$(printf '%s\n' "$meta" | sed -n 3p)"
+  incache="$(printf '%s\n' "$meta" | sed -n 4p)"
+  local -a rels=(); while IFS= read -r r; do [ -n "$r" ] && rels+=("$r"); done < <(printf '%s\n' "$meta" | tail -n +5)
+  [ -n "$disp" ] && [ "${#rels[@]}" -gt 0 ] || { rm -rf "$tmp"; die "archive manifest is missing app/paths"; }
+
+  info "archive: '$disp' $ver (from $host) — ${#rels[@]} location(s)"
+  local app; app="$(resolve_app_path "$disp" 2>/dev/null || true)"
+  if [ -n "$app" ]; then
+    app_path_is_running "$app" && { rm -rf "$tmp"; die "'$disp' is running — quit it first"; }
+    local iver; iver="$(plist_get "$app" CFBundleShortVersionString)"
+    [ -n "$iver" ] && [ "$iver" != "$ver" ] && warn "installed $disp is $iver, archive is from $ver — formats may differ"
+  else
+    warn "'$disp' isn't installed here — data will be restored anyway, ready for when you install it"
+  fi
+
+  local r; info "will import into:"; for r in "${rels[@]}"; do info "  ~/$r"; done
+  if [ "$force" != 1 ]; then
+    printf "Type IMPORT to write this data (anything replaced is staged to Multiapp Trash): "
+    local ans; read -r ans; [ "$ans" = "IMPORT" ] || { rm -rf "$tmp"; die "aborted"; }
+  fi
+
+  # Same rule as restore: an archive made WITHOUT caches is an incomplete copy of its directories,
+  # so it must be merged in, never moved over the live data (that deletes whatever was excluded).
+  local merge=0; [ "$incache" = "no" ] && merge=1
+  [ "$merge" = 1 ] && info "archive was made without caches → merging (nothing is deleted)"
+  local bk="$TRASH/app-import-$(printf '%s' "$disp" | tr ' /' '--')-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$bk"
+  local n=0
+  for r in "${rels[@]}"; do
+    local dest="$HOME/$r" payload="$tmp/$r" slug
+    [ -e "$payload" ] || { warn "archive has no payload for ~/$r — skipped"; continue; }
+    slug="$(printf '%s' "$r" | tr '/' '_')"
+    mkdir -p "$(dirname "$dest")"
+    if [ "$merge" = 1 ] && [ -d "$payload" ] && [ -d "$dest" ]; then
+      if ditto "$payload" "$dest" 2>/dev/null || cp -R "$payload"/. "$dest"/ 2>/dev/null; then n=$((n+1))
+      else warn "merge into ~/$r failed"; fi
+    else
+      [ -e "$dest" ] && mv "$dest" "$bk/$slug"
+      if mv "$payload" "$dest"; then n=$((n+1))
+      else warn "import of ~/$r failed — rolling back"; [ -e "$bk/$slug" ] && mv "$bk/$slug" "$dest"; fi
+    fi
+  done
+  rm -rf "$tmp"; rmdir "$bk" 2>/dev/null || true
+  info "imported $n location(s) for '$disp'"
+  [ -d "$bk" ] && info "replaced data staged at: ${bk/#$HOME/~}"
+  info "launch $disp — your sessions should be there (a login only carries over on the Mac that made the archive)"
+}
+
 cmd_list_installed() { # every app on this Mac, for the GUI picker:  name|path
   local d a
   for d in /Applications /Applications/Utilities "$HOME/Applications"; do
@@ -1189,6 +1255,8 @@ usage: multiapp <command> [args]
   transfer claude <src> <dst> [sel]   copy chosen sessions between profiles on this machine
   export  <app> <prof|main> [f] claude: archive chosen sessions (for another machine); others: whole profile
   import  <app> <prof|main> <f> merge a session archive (claude) / restore whole profile (others)
+  app-export      <app> [dir]   export ANY app's local data (sessions/settings) to a folder
+  app-import      <archive>     import an app-export archive back (merges; never deletes)
   session-check   <app>         show an app's login/session files + whether they'd survive a Mac move
   session-backup  <app> [out]   save ONLY the login session (any installed app; small + fast)
   session-restore <app> <file>  put a saved login back (same Mac)
@@ -1230,6 +1298,7 @@ case "$cmd" in
   session-restore) cmd_session_restore "$@" ;;
   session-check)   cmd_session_check "$@" ;;
   app-export)      cmd_app_export "$@" ;;
+  app-import)      cmd_app_import "$@" ;;
   list-installed)  cmd_list_installed "$@" ;;
   delete|rm) cmd_delete "$@" ;;
   trash)     cmd_trash "$@" ;;
