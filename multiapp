@@ -163,6 +163,23 @@ assert_inside_root() { # safety: refuse to operate outside our root
 # backup_spec <key> prints tab-rows:  V <verdict>  |  A <authLocus>  |  D <abs data path>  |  X <exclude glob>
 # (X excludes are cache dirs, relative to the parent of each D root; skipped unless --include-cache)
 AS_DIR="$HOME/Library/Application Support"
+
+# Standard per-bundle-ID locations that apps use for the WEB SESSION and settings. Missing these was
+# why a restore brought back history but not the login: cookies/localStorage for native web-view apps
+# live in HTTPStorages/WebKit, never in Application Support.
+bundle_id_of() { /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$(reg_field "$1" 2)/Contents/Info.plist" 2>/dev/null; }
+standard_paths() { # $1 = registry key → emits "D <path>" lines for whatever exists
+  local bid; bid="$(bundle_id_of "$1")"; [ -n "$bid" ] || return 0
+  local p
+  for p in "$HOME/Library/HTTPStorages/$bid" \
+           "$HOME/Library/HTTPStorages/$bid.binarycookies" \
+           "$HOME/Library/WebKit/$bid" \
+           "$HOME/Library/Preferences/$bid.plist"; do
+    [ -e "$p" ] && printf 'D %s\n' "$p"
+  done
+  return 0
+}
+
 backup_spec() {
   local elec_excludes=$'X Cache\nX Code Cache\nX GPUCache\nX DawnGraphiteCache\nX DawnWebGPUCache\nX Crashpad\nX component_crx_cache'
   case "$1" in
@@ -190,6 +207,17 @@ backup_spec() {
                        "$HOME/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram" ;;
     *) return 1 ;;
   esac
+}
+
+# full spec = app-specific paths + standard per-bundle-ID session/settings paths, de-duplicated
+# (an app spec may already list e.g. HTTPStorages; tarring the same root twice would duplicate it)
+full_backup_spec() {
+  backup_spec "$1" || return 1
+  local seen; seen="$(backup_spec "$1" 2>/dev/null | awk '$1=="D"{sub(/^D /,"");print}')"
+  standard_paths "$1" | while IFS= read -r line; do
+    local p="${line#D }"
+    printf '%s\n' "$seen" | grep -qxF "$p" || printf '%s\n' "$line"
+  done
 }
 
 app_is_running() { # $1 = registry key → 0 if running
@@ -222,7 +250,7 @@ cmd_backup() {
   shift || true
   while [ $# -gt 0 ]; do case "$1" in --include-cache) inc=1;; *) out="$1";; esac; shift; done
   [ -n "$key" ] || die "usage: multiapp backup <app> [out.tar.gz] [--include-cache]"
-  local spec; spec="$(backup_spec "$key" 2>/dev/null)" || die "no backup profile for '$key' — see: multiapp migrate-list"
+  local spec; spec="$(full_backup_spec "$key" 2>/dev/null)" || die "no backup profile for '$key' — see: multiapp migrate-list"
   app_is_running "$key" && die "'$key' is running — quit it first (a live app makes an inconsistent backup)"
 
   # collect existing data roots
@@ -255,15 +283,18 @@ cmd_backup() {
     printf '  "sourceHost": "%s",\n  "macOS": "%s",\n  "includedCache": %s,\n  "dataRoots": [\n' \
       "$(scutil --get ComputerName 2>/dev/null || hostname)" "$(sw_vers -productVersion 2>/dev/null)" "$([ "$inc" = 1 ] && echo true || echo false)"
     local i=0; for r in "${roots[@]}"; do [ $i -gt 0 ] && printf ',\n'; printf '    "%s"' "$r"; i=1; done
+    # paths RELATIVE to $HOME: unique per member (two roots can share a basename, e.g.
+    # Application Support/com.openai.chat and HTTPStorages/com.openai.chat) and portable across users
+    printf '\n  ],\n  "dataRootsRel": [\n'
+    i=0; for r in "${roots[@]}"; do [ $i -gt 0 ] && printf ',\n'; printf '    "%s"' "${r#$HOME/}"; i=1; done
     printf '\n  ]\n}\n'
   } > "$stage/manifest.json"
 
   info "backing up ${#roots[@]} data location(s) for '$key'…"
-  # archive: manifest at top, plus each root stored under payload/<basename>
+  # archive: manifest at top, plus every root stored under its path relative to $HOME
   local tarlist=(-C "$stage" manifest.json)
-  local idx=0
   for r in "${roots[@]}"; do
-    tarlist+=(-C "$(dirname "$r")" "$(basename "$r")")
+    tarlist+=(-C "$HOME" "${r#$HOME/}")
   done
   # ${arr[@]+…} guards empty arrays under macOS bash 3.2 + set -u; capture tar's error for diagnosis
   local terr; terr="$(mktemp)"
@@ -295,12 +326,14 @@ cmd_restore() {
   local iver; iver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$(reg_field "$key" 2)/Contents/Info.plist" 2>/dev/null || echo unknown)"
   [ "$aver" != "$iver" ] && warn "archive is from $key $aver; installed is $iver — restore anyway if you accept possible format drift"
 
-  # map each payload dir back to its recorded absolute destination
-  local -a dests roots
-  while IFS= read -r r; do roots+=("$r"); done < <(/usr/bin/python3 -c "import json;[print(p) for p in json.load(open('$man'))['dataRoots']]" 2>/dev/null)
-  [ "${#roots[@]}" -gt 0 ] || { rm -rf "$tmp"; die "manifest has no dataRoots"; }
+  # members are stored relative to $HOME → map straight back under THIS user's home
+  local -a rels
+  while IFS= read -r r; do [ -n "$r" ] && rels+=("$r"); done < <(/usr/bin/python3 -c "
+import json;d=json.load(open('$man'))
+[print(p) for p in d.get('dataRootsRel') or [p.split('/Library/',1)[-1] and 'Library/'+p.split('/Library/',1)[1] for p in d.get('dataRoots',[])]]" 2>/dev/null)
+  [ "${#rels[@]}" -gt 0 ] || { rm -rf "$tmp"; die "manifest has no data paths"; }
 
-  info "will restore into:"; for r in "${roots[@]}"; do info "  ${r/#$HOME/~}"; done
+  info "will restore into:"; for r in "${rels[@]}"; do info "  ~/$r"; done
   if [ "$force" != 1 ]; then
     printf "Type RESTORE to overwrite the above (current data is moved to Multiapp Trash first): "
     local a; read -r a; [ "$a" = "RESTORE" ] || { rm -rf "$tmp"; die "aborted"; }
@@ -309,15 +342,16 @@ cmd_restore() {
   # stage existing data to Trash (recoverable), then move payload into place
   local bk="$TRASH/restore-backup-$key-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$bk"
   local restored=0
-  for r in "${roots[@]}"; do
-    local base; base="$(basename "$r")"
-    local payload="$tmp/$base"
-    [ -e "$payload" ] || { warn "archive missing payload for $base — skipped"; continue; }
-    mkdir -p "$(dirname "$r")"
-    [ -e "$r" ] && mv "$r" "$bk/$base"          # stage current → Trash
-    if mv "$payload" "$r"; then restored=$((restored+1))
-    else # rollback this root
-      warn "restore of $base failed — rolling back"; [ -e "$bk/$base" ] && mv "$bk/$base" "$r"
+  for rel in "${rels[@]}"; do
+    local dest="$HOME/$rel"
+    local payload="$tmp/$rel"
+    [ -e "$payload" ] || { warn "archive has no payload for ~/$rel — skipped"; continue; }
+    local slug; slug="$(printf '%s' "$rel" | tr '/' '_')"   # flat, collision-free staging name
+    mkdir -p "$(dirname "$dest")" "$bk"
+    [ -e "$dest" ] && mv "$dest" "$bk/$slug"                # stage current → Trash
+    if mv "$payload" "$dest"; then restored=$((restored+1))
+    else
+      warn "restore of ~/$rel failed — rolling back"; [ -e "$bk/$slug" ] && mv "$bk/$slug" "$dest"
     fi
   done
   rm -rf "$tmp"
