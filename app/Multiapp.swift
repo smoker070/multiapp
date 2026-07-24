@@ -111,6 +111,33 @@ struct CLI {
 
     static func isRunning(app key: String) -> Bool { runningApp(key) != nil }
 
+    struct InstalledApp { let name: String; let path: String }
+
+    /// Every app installed on this Mac (for the export picker) — not just profile-capable ones.
+    static func installedApps() -> [InstalledApp] {
+        run(["list-installed"]).out.split(separator: "\n").compactMap {
+            let f = $0.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+            guard f.count >= 2 else { return nil }
+            return InstalledApp(name: f[0], path: f[1])
+        }
+    }
+
+    static func runningNamed(_ name: String) -> NSRunningApplication? {
+        NSWorkspace.shared.runningApplications.first { $0.bundleURL?.lastPathComponent == "\(name).app" }
+    }
+
+    /// Quit an app by display name and wait until it's really gone (same contract as quit(app:)).
+    @discardableResult
+    static func quitNamed(_ name: String) -> Bool {
+        guard let r = runningNamed(name) else { return true }
+        r.terminate()
+        for _ in 0..<24 {
+            if runningNamed(name) == nil { return true }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        return runningNamed(name) == nil
+    }
+
     /// Quit the app AND wait until it is really gone. Uses NSRunningApplication.terminate() (a polite
     /// quit that needs no Automation permission — unlike osascript, which an ad-hoc-signed app may be
     /// denied). Never force-kills: unsaved work is the user's, not ours.
@@ -306,6 +333,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         backupItem.submenu = backupSub
         menu.addItem(backupItem)
 
+        menu.addItem(make("Export App Data…", #selector(exportAppData(_:))))
         menu.addItem(make("Rescan Installed Apps", #selector(rescan(_:))))
         menu.addItem(.separator())
         let v = NSMenuItem(title: "Multiapp v0.2", action: nil, keyEquivalent: "")
@@ -525,6 +553,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let r = CLI.run(["transfer", "claude", from, to, presel])
             self.alertAsync(r.code == 0 ? "Sessions transferred" : "Transfer failed",
                             r.code == 0 ? r.out + "\nRestart the '\(to)' profile to see them." : r.err)
+        }
+    }
+
+    /// Export ANY installed app's locally-saved data (work sessions, settings) to a chosen folder —
+    /// works for apps Multiapp can't profile at all (Codex/ChatGPT, Antigravity, sandboxed apps…).
+    @objc func exportAppData(_ s: NSMenuItem) {
+        let apps = CLI.installedApps()
+        guard !apps.isEmpty else { return alert("No apps found", "Couldn't list the applications on this Mac.") }
+
+        let d = CenteredDialog(title: "Export App Data",
+                               message: "Pick an app. Its locally saved sessions and settings are exported to a folder you choose (caches excluded).",
+                               width: 380)
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        for a in apps { popup.addItem(withTitle: a.name); popup.lastItem?.representedObject = a.name }
+        d.add(popup, height: 26, gap: 14)
+        d.addButton("Choose Folder…", code: 1, key: "\r")
+        d.addButton("Cancel", code: 2, key: "\u{1b}")
+        guard d.run() == 1, let name = popup.selectedItem?.representedObject as? String else { return }
+
+        let panel = NSOpenPanel()
+        panel.title = "Export \(name) to…"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Export Here"
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let dir = panel.url else { return }
+
+        // the app must be closed for a consistent copy
+        var mustQuit = false
+        if CLI.runningNamed(name) != nil {
+            let q = CenteredDialog(title: "Quit \(name)?",
+                                   message: "\(name) must be closed so its data is exported consistently.\nSave any unsaved work first.")
+            q.addButton("Quit & Export", code: 1, key: "\r")
+            q.addButton("Cancel", code: 2, key: "\u{1b}")
+            guard q.run() == 1 else { return }
+            mustQuit = true
+        }
+
+        setBusy(true, "exporting \(name)…")
+        DispatchQueue.global().async {
+            if mustQuit, !CLI.quitNamed(name) {
+                self.setBusy(false)
+                self.alertAsync("Couldn't export \(name)", "\(name) is still running — quit it manually and try again.")
+                return
+            }
+            let r = CLI.run(["app-export", name, dir.path])
+            let ok = r.code == 0
+            self.setBusy(false)
+            if !ok { CLI.log("app-export \(name) FAILED (exit \(r.code))\n  stdout: \(r.out)\n  stderr: \(r.err)") }
+            self.alertAsync(ok ? "Export complete" : "Export failed",
+                            ok ? ((r.out.split(separator: "\n").first(where: { $0.contains("exported →") }).map(String.init)
+                                   ?? dir.path) + "\n\nThis archive holds your app data — keep it private.")
+                               : ((r.err.isEmpty ? r.out : r.err) + "\n\n(details in ~/Library/Logs/Multiapp.log)"))
         }
     }
 

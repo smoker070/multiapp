@@ -360,6 +360,278 @@ import json;d=json.load(open('$man'))
   info "relaunch $key — your history is back; the login works too if this Mac's Keychain is unchanged"
 }
 
+# ================================================================ login sessions (any app)
+# Purpose: save just the LOGIN so you don't have to sign in again (incl. "Sign in with Google").
+# Works for ANY installed app — resolved by bundle id, no profile support required.
+# Honest scope: restores the login on THIS Mac. It cannot teleport a login to another Mac, because
+# the decryption key / token lives in the Keychain (machine+user bound) and is never in the archive.
+
+resolve_app_path() { # $1 = registry key | app name | /path/to/App.app → echoes bundle path
+  local a="$1" p c
+  p="$(reg_field "$a" 2 2>/dev/null)"
+  [ -n "$p" ] && [ -d "$p" ] && { printf '%s' "$p"; return 0; }
+  case "$a" in *.app) [ -d "$a" ] && { printf '%s' "$a"; return 0; };; esac
+  for c in "/Applications/$a.app" "$HOME/Applications/$a.app" "/System/Applications/$a.app" "/Applications/Utilities/$a.app"; do
+    [ -d "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+
+plist_get() { /usr/libexec/PlistBuddy -c "Print :$2" "$1/Contents/Info.plist" 2>/dev/null; }
+
+session_paths() { # $1 = .app path → absolute paths of login-bearing data that exists
+  local app="$1" bid p d n
+  bid="$(plist_get "$app" CFBundleIdentifier)"; [ -n "$bid" ] || return 1
+  # native / WKWebView apps: cookies + web storage keyed by bundle id
+  for p in "$HOME/Library/HTTPStorages/$bid" \
+           "$HOME/Library/HTTPStorages/$bid.binarycookies" \
+           "$HOME/Library/WebKit/$bid" \
+           "$HOME/Library/Cookies/$bid.binarycookies"; do
+    [ -e "$p" ] && printf '%s\n' "$p"
+  done
+  # sandboxed apps keep the same things inside their container
+  for p in "$HOME/Library/Containers/$bid/Data/Library/Cookies" \
+           "$HOME/Library/Containers/$bid/Data/Library/HTTPStorages" \
+           "$HOME/Library/Containers/$bid/Data/Library/WebKit"; do
+    [ -e "$p" ] && printf '%s\n' "$p"
+  done
+  # Electron/Chromium apps: the auth-bearing subset of the user-data dir (NOT caches/history)
+  for n in "$(plist_get "$app" CFBundleName)" "$(basename "$app" .app)" "$bid"; do
+    [ -n "$n" ] || continue
+    d="$AS_DIR/$n"
+    [ -d "$d" ] && { [ -e "$d/Local State" ] || [ -e "$d/Cookies" ] || [ -e "$d/Network" ]; } || continue
+    for p in "Cookies" "Cookies-journal" "Local State" "Local Storage" "Session Storage" "IndexedDB" "Network"; do
+      [ -e "$d/$p" ] && printf '%s\n' "$d/$p"
+    done
+    break
+  done
+  # Gecko (Firefox-family): per-profile cookie + session store.
+  # Deliberately NOT key4.db / logins.json — those are the saved-PASSWORD vault, not a login session,
+  # and copying them around would be a far bigger exposure than this feature needs.
+  local prof
+  for n in "$(plist_get "$app" CFBundleName)" "$(basename "$app" .app)"; do
+    [ -n "$n" ] && [ -d "$AS_DIR/$n/Profiles" ] || continue
+    for prof in "$AS_DIR/$n/Profiles"/*; do
+      [ -d "$prof" ] || continue
+      for p in "cookies.sqlite" "cookies.sqlite-wal" "sessionstore.jsonlz4" "sessionstore-backups"; do
+        [ -e "$prof/$p" ] && printf '%s\n' "$prof/$p"
+      done
+    done
+    break
+  done
+}
+
+session_portability() { # $1 = .app path → "same-mac-only" | "maybe-portable" | "none"
+  local app="$1" bid n hit ck
+  bid="$(plist_get "$app" CFBundleIdentifier)"
+  n="$(plist_get "$app" CFBundleName)"; [ -n "$n" ] || n="$(basename "$app" .app)"
+  # a "<App> Safe Storage" keychain item means cookies are encrypted with a Keychain-held key
+  security find-generic-password -s "$n Safe Storage" >/dev/null 2>&1 && { printf 'same-mac-only'; return; }
+  # an app that declares keychain-access-groups keeps its token in the Keychain (e.g. ChatGPT Classic)
+  codesign -d --entitlements :- "$app" 2>/dev/null | grep -q "keychain-access-groups" && { printf 'same-mac-only'; return; }
+  # or Chromium cookies carrying the v10/v11 OS-encryption marker
+  ck="$AS_DIR/$n/Cookies"; [ -f "$ck" ] || ck="$AS_DIR/$n/Network/Cookies"
+  if [ -f "$ck" ]; then
+    hit="$(/usr/bin/python3 -c "
+import sqlite3,shutil,tempfile,os,sys
+t=tempfile.mktemp()
+try:
+    shutil.copy('$ck',t); c=sqlite3.connect(t)
+    r=c.execute('select encrypted_value from cookies limit 20').fetchall(); c.close()
+    print('enc' if any(x[0][:3] in (b'v10',b'v11') for x in r if x[0]) else 'plain')
+except Exception: print('unknown')
+finally:
+    try: os.unlink(t)
+    except Exception: pass" 2>/dev/null)"
+    [ "$hit" = enc ] && { printf 'same-mac-only'; return; }
+    [ "$hit" = plain ] && { printf 'maybe-portable'; return; }
+  fi
+  [ -n "$(session_paths "$app")" ] && printf 'maybe-portable' || printf 'none'
+}
+
+cmd_session_backup() {
+  local a="${1:-}" out="${2:-}"
+  [ -n "$a" ] || die "usage: multiapp session-backup <app> [out.tar.gz]   (app = name, path, or key)"
+  local app; app="$(resolve_app_path "$a")" || die "app not found: '$a' (try the exact name, e.g. \"Notion\", or a full /Applications/X.app path)"
+  local disp; disp="$(basename "$app" .app)"
+  local -a paths=(); while IFS= read -r p; do [ -n "$p" ] && paths+=("$p"); done < <(session_paths "$app")
+  [ "${#paths[@]}" -gt 0 ] || die "no login/session data found for '$disp' — its login is probably Keychain-only, which can't be backed up as files"
+
+  local port; port="$(session_portability "$app")"
+  local slug; slug="$(printf '%s' "$disp" | tr ' /' '--' | tr -cd 'A-Za-z0-9._-')"
+  local desk="$HOME/Desktop"; [ -d "$desk" ] || desk="$HOME"
+  [ -n "$out" ] || out="$desk/multiapp-session-${slug}-$(date +%Y%m%d-%H%M%S).tar.gz"
+
+  app_path_is_running "$app" && die "'$disp' is running — quit it first so the session files are consistent"
+  warn "this archive contains your LOGIN SESSION — treat it like a password"
+  [ "$port" = same-mac-only ] && info "note: this app's session is Keychain-encrypted → restores on THIS Mac only"
+
+  local stage; stage="$(mktemp -d)"
+  {
+    printf '{\n  "multiapp_session": "1",\n  "app": "%s",\n  "bundleId": "%s",\n  "portability": "%s",\n' \
+      "$disp" "$(plist_get "$app" CFBundleIdentifier)" "$port"
+    printf '  "sourceHost": "%s",\n  "paths": [\n' "$(scutil --get ComputerName 2>/dev/null || hostname)"
+    local i=0 p; for p in ${paths[@]+"${paths[@]}"}; do [ $i -gt 0 ] && printf ',\n'; printf '    "%s"' "${p#$HOME/}"; i=1; done
+    printf '\n  ]\n}\n'
+  } > "$stage/manifest.json"
+
+  local tarlist=(-C "$stage" manifest.json) p
+  for p in ${paths[@]+"${paths[@]}"}; do tarlist+=(-C "$HOME" "${p#$HOME/}"); done
+  local terr; terr="$(mktemp)"
+  if tar -czf "$out" "${tarlist[@]}" 2>"$terr"; then
+    rm -rf "$stage" "$terr"
+    info "session saved (${#paths[@]} item(s)) → $out  ($(du -sh "$out" 2>/dev/null | awk '{print $1}'))"
+    info "restore with:  multiapp session-restore \"$a\" \"$out\""
+  else
+    local why; why="$(grep -v 'Error exit delayed' "$terr" | head -2 | tr '\n' ' ')"
+    rm -rf "$stage" "$terr"; rm -f "$out"; die "session backup failed: ${why:-tar error}"
+  fi
+}
+
+cmd_session_restore() {
+  local a="${1:-}" file="${2:-}" force=0
+  [ "${3:-}" = "--force" ] && force=1
+  [ -n "$a" ] && [ -n "$file" ] || die "usage: multiapp session-restore <app> <archive.tar.gz>"
+  [ -f "$file" ] || die "no such file: $file"
+  local app; app="$(resolve_app_path "$a")" || die "app not found: '$a'"
+  local disp; disp="$(basename "$app" .app)"
+  tar -tzf "$file" 2>/dev/null | grep -qE '(^/|(^|/)\.\.(/|$))' && die "unsafe archive (absolute or ../ paths) — refusing"
+  tar -tzf "$file" 2>/dev/null | grep -q '^manifest.json$' || die "not a Multiapp session archive"
+  app_path_is_running "$app" && die "'$disp' is running — quit it first"
+
+  local tmp; tmp="$(mktemp -d)"
+  tar -xzf "$file" -C "$tmp" 2>/dev/null || { rm -rf "$tmp"; die "cannot extract archive"; }
+  local -a rels=(); while IFS= read -r r; do [ -n "$r" ] && rels+=("$r"); done \
+    < <(/usr/bin/python3 -c "import json;[print(p) for p in json.load(open('$tmp/manifest.json'))['paths']]" 2>/dev/null)
+  [ "${#rels[@]}" -gt 0 ] || { rm -rf "$tmp"; die "archive lists no session paths"; }
+
+  info "restoring the saved login for '$disp':"; local r; for r in "${rels[@]}"; do info "  ~/$r"; done
+  if [ "$force" != 1 ]; then
+    printf "Type RESTORE to replace the current session (previous files staged to Multiapp Trash): "
+    local ans; read -r ans; [ "$ans" = "RESTORE" ] || { rm -rf "$tmp"; die "aborted"; }
+  fi
+  local bk="$TRASH/session-backup-$disp-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$bk"
+  local n=0
+  for r in "${rels[@]}"; do
+    local dest="$HOME/$r" payload="$tmp/$r" slug
+    [ -e "$payload" ] || { warn "archive has no payload for ~/$r — skipped"; continue; }
+    slug="$(printf '%s' "$r" | tr '/' '_')"
+    mkdir -p "$(dirname "$dest")"
+    [ -e "$dest" ] && mv "$dest" "$bk/$slug"
+    if mv "$payload" "$dest"; then n=$((n+1)); else
+      warn "restore of ~/$r failed — rolling back"; [ -e "$bk/$slug" ] && mv "$bk/$slug" "$dest"
+    fi
+  done
+  rm -rf "$tmp"
+  info "restored $n session item(s) for '$disp'"
+  info "previous files staged at: ${bk/#$HOME/~}"
+  info "launch $disp — you should already be signed in (same Mac). If not, its login is Keychain-only."
+}
+
+app_path_is_running() { ps -eo args 2>/dev/null | grep -F "$1/Contents/MacOS/" | grep -qv grep; }
+
+# ---- export an app's locally-stored data ("work sessions": Codex chats, Antigravity sessions, …)
+# Works for ANY installed app, whether or not Multiapp can profile it.
+generic_data_paths() { # $1 = .app path → data locations that exist (deduped)
+  local app="$1" bid n d p out=""
+  bid="$(plist_get "$app" CFBundleIdentifier)"; [ -n "$bid" ] || return 1
+  emit() { case "$out" in *"|$1|"*) ;; *) out="$out|$1|"; printf '%s\n' "$1";; esac; }
+  for n in "$(plist_get "$app" CFBundleName)" "$(basename "$app" .app)" "$bid"; do
+    [ -n "$n" ] && [ -d "$AS_DIR/$n" ] && emit "$AS_DIR/$n"
+  done
+  [ -d "$HOME/Library/Containers/$bid/Data" ] && emit "$HOME/Library/Containers/$bid/Data"
+  for d in "$HOME/Library/Group Containers"/*; do
+    [ -d "$d" ] || continue
+    case "$(basename "$d")" in *"$bid"*) emit "$d";; esac
+  done
+  for p in "$HOME/Library/HTTPStorages/$bid" "$HOME/Library/WebKit/$bid" "$HOME/Library/Preferences/$bid.plist"; do
+    [ -e "$p" ] && emit "$p"
+  done
+  # Home dotfolders — where CLI-style apps actually keep their work sessions
+  # (~/.codex for ChatGPT/Codex, ~/.claude for Claude, ~/.antigravity, …). Missing these meant an
+  # export of Codex captured almost nothing, since its 600 MB of sessions live here, not in ~/Library.
+  local cand
+  for n in "$(basename "$app" .app)" "$(plist_get "$app" CFBundleName)" "${bid##*.}"; do
+    [ -n "$n" ] || continue
+    cand="$(printf '%s' "$n" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
+    [ -d "$HOME/.$cand" ] && emit "$HOME/.$cand"
+  done
+}
+
+cmd_app_export() {
+  local a="${1:-}" out="${2:-}" inc=0
+  shift $(( $# > 0 ? 1 : 0 )) || true
+  while [ $# -gt 0 ]; do case "$1" in --include-cache) inc=1;; *) [ -z "$out" ] && out="$1";; esac; shift; done
+  [ -n "$a" ] || die "usage: multiapp app-export <app> [out.tar.gz] [--include-cache]"
+  local app; app="$(resolve_app_path "$a")" || die "app not found: '$a'"
+  local disp; disp="$(basename "$app" .app)"
+  local -a paths=(); while IFS= read -r p; do [ -n "$p" ] && paths+=("$p"); done < <(generic_data_paths "$app" 2>/dev/null)
+  [ "${#paths[@]}" -gt 0 ] || die "no local data found for '$disp' (it may keep everything server-side)"
+  app_path_is_running "$app" && die "'$disp' is running — quit it first for a consistent export"
+
+  local slug; slug="$(printf '%s' "$disp" | tr ' /' '--' | tr -cd 'A-Za-z0-9._-')"
+  local desk="$HOME/Desktop"; [ -d "$desk" ] || desk="$HOME"
+  [ -n "$out" ] || out="$desk/multiapp-export-${slug}-$(date +%Y%m%d-%H%M%S).tar.gz"
+  case "$out" in */) out="${out%/}/multiapp-export-${slug}-$(date +%Y%m%d-%H%M%S).tar.gz";; esac
+  [ -d "$out" ] && out="$out/multiapp-export-${slug}-$(date +%Y%m%d-%H%M%S).tar.gz"
+
+  local exargs=(--exclude=".com.apple.containermanagerd.metadata.plist")
+  if [ "$inc" = 0 ]; then
+    local x; for x in "Cache" "Caches" "Code Cache" "GPUCache" "DawnGraphiteCache" "DawnWebGPUCache" "Crashpad" "logs" "Logs" "vm_bundles"; do
+      exargs+=(--exclude="$x")
+    done
+    info "excluding caches/logs (use --include-cache to keep them)"
+  fi
+
+  warn "this archive contains '$disp' local data, which may include your signed-in session — keep it safe"
+  local stage; stage="$(mktemp -d)"
+  {
+    printf '{\n  "multiapp_export": "1",\n  "app": "%s",\n  "bundleId": "%s",\n  "appVersion": "%s",\n' \
+      "$disp" "$(plist_get "$app" CFBundleIdentifier)" "$(plist_get "$app" CFBundleShortVersionString)"
+    printf '  "sourceHost": "%s",\n  "includedCache": %s,\n  "paths": [\n' \
+      "$(scutil --get ComputerName 2>/dev/null || hostname)" "$([ "$inc" = 1 ] && echo true || echo false)"
+    local i=0 p; for p in ${paths[@]+"${paths[@]}"}; do [ $i -gt 0 ] && printf ',\n'; printf '    "%s"' "${p#$HOME/}"; i=1; done
+    printf '\n  ]\n}\n'
+  } > "$stage/manifest.json"
+
+  local tarlist=(-C "$stage" manifest.json) p
+  for p in ${paths[@]+"${paths[@]}"}; do tarlist+=(-C "$HOME" "${p#$HOME/}"); done
+  info "exporting ${#paths[@]} location(s) from '$disp'…"
+  local terr; terr="$(mktemp)"
+  if tar -czf "$out" "${exargs[@]}" "${tarlist[@]}" 2>"$terr"; then
+    rm -rf "$stage" "$terr"
+    info "exported → $out  ($(du -sh "$out" 2>/dev/null | awk '{print $1}'))"
+  else
+    local why; why="$(grep -v 'Error exit delayed' "$terr" | head -2 | tr '\n' ' ')"
+    rm -rf "$stage" "$terr"; rm -f "$out"; die "export failed: ${why:-tar error}"
+  fi
+}
+
+cmd_list_installed() { # every app on this Mac, for the GUI picker:  name|path
+  local d a
+  for d in /Applications /Applications/Utilities "$HOME/Applications"; do
+    [ -d "$d" ] || continue
+    for a in "$d"/*.app; do
+      [ -d "$a" ] || continue
+      printf '%s|%s\n' "$(basename "$a" .app)" "$a"
+    done
+  done | sort -u
+}
+
+cmd_session_check() {
+  local a="${1:-}"; [ -n "$a" ] || die "usage: multiapp session-check <app>"
+  local app; app="$(resolve_app_path "$a")" || die "app not found: '$a'"
+  local disp; disp="$(basename "$app" .app)"
+  local -a paths=(); while IFS= read -r p; do [ -n "$p" ] && paths+=("$p"); done < <(session_paths "$app" 2>/dev/null)
+  info "$disp — login/session data found: ${#paths[@]:-0} item(s)"
+  local p; for p in ${paths[@]+"${paths[@]}"}; do info "  ~/${p#$HOME/}"; done
+  case "$(session_portability "$app")" in
+    same-mac-only)  info "portability: THIS MAC ONLY (session is Keychain-encrypted)";;
+    maybe-portable) info "portability: possibly portable to another Mac — unverified, test before relying on it";;
+    none)           info "portability: no session files — this app's login lives only in the Keychain";;
+  esac
+}
+
 # ================================================================ commands
 cmd_apps() {
   printf '%-20s %-24s %-11s %s\n' "KEY" "APP" "VERDICT" "NOTE"
@@ -899,6 +1171,9 @@ usage: multiapp <command> [args]
   transfer claude <src> <dst> [sel]   copy chosen sessions between profiles on this machine
   export  <app> <prof|main> [f] claude: archive chosen sessions (for another machine); others: whole profile
   import  <app> <prof|main> <f> merge a session archive (claude) / restore whole profile (others)
+  session-check   <app>         show an app's login/session files + whether they'd survive a Mac move
+  session-backup  <app> [out]   save ONLY the login session (any installed app; small + fast)
+  session-restore <app> <file>  put a saved login back (same Mac)
   migrate-list                  apps whose real data can be backed up on this machine
   backup  <app> [out] [--include-cache]   back up an app's REAL data (same-Mac restore = full, incl. login)
   restore <app> <archive>       restore a backup (quits nothing; stages current data to Trash first)
@@ -933,6 +1208,11 @@ case "$cmd" in
   backup)    cmd_backup "$@" ;;
   restore)   cmd_restore "$@" ;;
   migrate-list) cmd_migratelist "$@" ;;
+  session-backup)  cmd_session_backup "$@" ;;
+  session-restore) cmd_session_restore "$@" ;;
+  session-check)   cmd_session_check "$@" ;;
+  app-export)      cmd_app_export "$@" ;;
+  list-installed)  cmd_list_installed "$@" ;;
   delete|rm) cmd_delete "$@" ;;
   trash)     cmd_trash "$@" ;;
   wrapper)   cmd_wrapper "$@" ;;
