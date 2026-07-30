@@ -99,6 +99,7 @@ openmtp|/Applications/OpenMTP.app|OpenMTP|electron|supported|
 gemini|/Applications/Gemini.app|Gemini|none|unsupported|Native app, no isolation lever exists (E6).
 chatgpt-classic|/Applications/ChatGPT Classic.app|ChatGPT Classic|none|unsupported|Native pre-merge app, no levers; shares OpenAI identity with new ChatGPT.
 telegram|/Applications/Telegram.app|Telegram|none|unsupported|Sandboxed (container is bundle-ID-keyed). Use Telegram's built-in multi-account instead.
+telegram-desktop|/Applications/Telegram Desktop.app|Telegram Desktop|none|unsupported|Separate app from Telegram for macOS, with its own login. Not Electron, so no profiles — but its data/session back up fine.
 hdrezka|/Applications/HDRezka-Client.app|HDRezka-Client|none|unsupported|App overrides userData in its own code (E11); flag is ignored."
 
 full_registry() {
@@ -199,12 +200,14 @@ backup_spec() {
     antigravity-ide) printf 'V full-samemac\nA file\nD %s\n%s\n' "$AS_DIR/Antigravity IDE" "$elec_excludes" ;;
     openmtp)         printf 'V full-samemac\nA file\nD %s\n' "$AS_DIR/OpenMTP" ;;
     google-chrome)   printf 'V full-samemac\nA keychain\nD %s\n%s\n' "$AS_DIR/Google/Chrome" "$elec_excludes" ;;
-    gemini)          printf 'V experimental\nA keychain\nD %s\nD %s\nD %s\n' \
+    gemini)          printf 'V full-samemac\nA keychain\nD %s\nD %s\nD %s\n' \
                        "$AS_DIR/com.google.GeminiMacOS" "$HOME/Library/HTTPStorages/com.google.GeminiMacOS" \
                        "$HOME/Library/Group Containers/group.com.google.gemini" ;;
-    telegram)        # back up the container's Data (the app's real home) — the container root holds a
+    telegram-desktop) # tdesktop keeps everything (incl. the login) in tdata; user_data*/emoji are cache
+                     printf 'V full-samemac\nA file\nD %s\nX user_data*\nX emoji\n' "$AS_DIR/Telegram Desktop" ;;
+    telegram)        # verified 2026-07-25: 1.6G backup + restore round-trip OK. back up the container's Data (the app's real home) — the container root holds a
                      # system-protected .com.apple.containermanagerd.metadata.plist that tar can't read
-                     printf 'V experimental\nA keychain\nD %s\nD %s\nX postbox/media\n' \
+                     printf 'V full-samemac\nA keychain\nD %s\nD %s\nX postbox/media\n' \
                        "$HOME/Library/Containers/ru.keepcoder.Telegram/Data" \
                        "$HOME/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram" ;;
     *) return 1 ;;
@@ -398,33 +401,43 @@ resolve_app_path() { # $1 = registry key | app name | /path/to/App.app → echoe
 plist_get() { /usr/libexec/PlistBuddy -c "Print :$2" "$1/Contents/Info.plist" 2>/dev/null; }
 
 session_paths() { # $1 = .app path → absolute paths of login-bearing data that exists
+  # NOTE: every existence test here uses `if`, never `[ -e x ] && printf`. Under `set -e` a failing
+  # test as the LAST statement of a loop body makes the loop (and this function) return non-zero, which
+  # aborted the whole function mid-way — it silently returned only the first match, so Chrome/Firefox/
+  # tdesktop detection and every verdict built on it were wrong.
   local app="$1" bid p d n
-  bid="$(plist_get "$app" CFBundleIdentifier)"; [ -n "$bid" ] || return 1
+  bid="$(plist_get "$app" CFBundleIdentifier)"; [ -n "$bid" ] || return 0
   # native / WKWebView apps: cookies + web storage keyed by bundle id
   for p in "$HOME/Library/HTTPStorages/$bid" \
            "$HOME/Library/HTTPStorages/$bid.binarycookies" \
            "$HOME/Library/WebKit/$bid" \
            "$HOME/Library/Cookies/$bid.binarycookies"; do
-    [ -e "$p" ] && printf '%s\n' "$p"
+    if [ -e "$p" ]; then printf '%s\n' "$p"; fi
   done
   # sandboxed apps keep the same things inside their container
   for p in "$HOME/Library/Containers/$bid/Data/Library/Cookies" \
            "$HOME/Library/Containers/$bid/Data/Library/HTTPStorages" \
            "$HOME/Library/Containers/$bid/Data/Library/WebKit"; do
-    [ -e "$p" ] && printf '%s\n' "$p"
+    if [ -e "$p" ]; then printf '%s\n' "$p"; fi
   done
   # Electron/Chromium apps: the auth-bearing subset of the user-data dir (NOT caches/history)
   for n in "$(plist_get "$app" CFBundleName)" "$(basename "$app" .app)" "$bid"; do
     [ -n "$n" ] || continue
     d="$AS_DIR/$n"
     # some vendors nest the data dir (Chrome lives in "Google/Chrome") — look one level down too
-    [ -d "$d" ] || d="$(find "$AS_DIR" -maxdepth 2 -type d -name "$n" 2>/dev/null | head -1)"
+    [ -d "$d" ] || d="$(find "$AS_DIR" -maxdepth 2 -type d -name "$n" 2>/dev/null | head -1 || true)"
     [ -n "$d" ] && [ -d "$d" ] && { [ -e "$d/Local State" ] || [ -e "$d/Cookies" ] || [ -e "$d/Network" ] || [ -d "$d/Default" ]; } || continue
     for p in "Cookies" "Cookies-journal" "Local State" "Local Storage" "Session Storage" "IndexedDB" "Network" \
              "Default/Cookies" "Default/Local Storage" "Default/Session Storage" "Default/Network"; do
-      [ -e "$d/$p" ] && printf '%s\n' "$d/$p"
+      if [ -e "$d/$p" ]; then printf '%s\n' "$d/$p"; fi
     done
     break
+  done
+  # Telegram Desktop (tdesktop) family: the login lives in tdata — its own encrypted key store, NOT
+  # the macOS Keychain — so this session really is file-based (and potentially portable).
+  # user_data*/emoji are message+emoji caches (~460 MB of 486 MB) and are skipped via session_excludes.
+  for n in "$(basename "$app" .app)" "$(plist_get "$app" CFBundleName)"; do
+    if [ -n "$n" ] && [ -d "$AS_DIR/$n/tdata" ]; then printf '%s\n' "$AS_DIR/$n/tdata"; break; fi
   done
   # Gecko (Firefox-family): per-profile cookie + session store.
   # Deliberately NOT key4.db / logins.json — those are the saved-PASSWORD vault, not a login session,
@@ -435,11 +448,21 @@ session_paths() { # $1 = .app path → absolute paths of login-bearing data that
     for prof in "$AS_DIR/$n/Profiles"/*; do
       [ -d "$prof" ] || continue
       for p in "cookies.sqlite" "cookies.sqlite-wal" "sessionstore.jsonlz4" "sessionstore-backups"; do
-        [ -e "$prof/$p" ] && printf '%s\n' "$prof/$p"
+        if [ -e "$prof/$p" ]; then printf '%s\n' "$prof/$p"; fi
       done
     done
     break
   done
+  return 0
+}
+
+session_excludes() { # $1 = .app path → cache patterns to skip inside session paths
+  local app="$1" n
+  for n in "$(basename "$app" .app)" "$(plist_get "$app" CFBundleName)"; do
+    # tdesktop: tdata holds the login, but user_data*/emoji are ~460 MB of message/emoji cache
+    [ -n "$n" ] && [ -d "$AS_DIR/$n/tdata" ] && { printf 'user_data*\nemoji\n'; return; }
+  done
+  return 0
 }
 
 session_portability() { # $1 = .app path → keychain-only | same-mac-only | maybe-portable | none
@@ -461,7 +484,7 @@ session_portability() { # $1 = .app path → keychain-only | same-mac-only | may
       */Cookies|*/cookies.sqlite) [ -f "$sp" ] && { ck="$sp"; break; };;
     esac
     if [ -d "$sp" ]; then
-      local found; found="$(find "$sp" -maxdepth 3 \( -name Cookies -o -name cookies.sqlite \) -type f 2>/dev/null | head -1)"
+      local found; found="$(find "$sp" -maxdepth 3 \( -name Cookies -o -name cookies.sqlite \) -type f 2>/dev/null | head -1 || true)"
       [ -n "$found" ] && { ck="$found"; break; }
     fi
   done < <(session_paths "$app" 2>/dev/null)
@@ -514,15 +537,21 @@ cmd_session_backup() {
   {
     printf '{\n  "multiapp_session": "1",\n  "app": "%s",\n  "bundleId": "%s",\n  "portability": "%s",\n' \
       "$disp" "$(plist_get "$app" CFBundleIdentifier)" "$port"
-    printf '  "sourceHost": "%s",\n  "paths": [\n' "$(scutil --get ComputerName 2>/dev/null || hostname)"
+    printf '  "sourceHost": "%s",\n  "excludedCache": %s,\n  "paths": [\n' \
+      "$(scutil --get ComputerName 2>/dev/null || hostname)" \
+      "$([ -n "$(session_excludes "$app" 2>/dev/null)" ] && echo true || echo false)"
     local i=0 p; for p in ${paths[@]+"${paths[@]}"}; do [ $i -gt 0 ] && printf ',\n'; printf '    "%s"' "${p#$HOME/}"; i=1; done
     printf '\n  ]\n}\n'
   } > "$stage/manifest.json"
 
   local tarlist=(-C "$stage" manifest.json) p
   for p in ${paths[@]+"${paths[@]}"}; do tarlist+=(-C "$HOME" "${p#$HOME/}"); done
+  # skip caches that live inside a session path (e.g. tdesktop's tdata/user_data*)
+  local exargs=() x
+  while IFS= read -r x; do [ -n "$x" ] && exargs+=(--exclude="$x"); done < <(session_excludes "$app" 2>/dev/null)
+  [ "${#exargs[@]}" -gt 0 ] && info "skipping in-session caches: $(session_excludes "$app" | tr '\n' ' ')"
   local terr; terr="$(mktemp)"
-  if tar -czf "$out" "${tarlist[@]}" 2>"$terr"; then
+  if tar -czf "$out" ${exargs[@]+"${exargs[@]}"} "${tarlist[@]}" 2>"$terr"; then
     rm -rf "$stage" "$terr"
     info "session saved (${#paths[@]} item(s)) → $out  ($(du -sh "$out" 2>/dev/null | awk '{print $1}'))"
     info "restore with:  multiapp session-restore \"$a\" \"$out\""
@@ -554,6 +583,11 @@ cmd_session_restore() {
     printf "Type RESTORE to replace the current session (previous files staged to Multiapp Trash): "
     local ans; read -r ans; [ "$ans" = "RESTORE" ] || { rm -rf "$tmp"; die "aborted"; }
   fi
+  # Same rule as the data restore: if the archive skipped in-session caches it is an incomplete copy of
+  # those directories, so MERGE instead of replacing (replacing would delete e.g. tdata/user_data*).
+  local exc; exc="$(/usr/bin/python3 -c "import json;print(json.load(open('$tmp/manifest.json')).get('excludedCache',False))" 2>/dev/null)"
+  local merge=0; { [ "$exc" = True ] || [ "$exc" = true ]; } && merge=1
+  [ "$merge" = 1 ] && info "archive skipped in-session caches → merging (nothing is deleted)"
   local bk="$TRASH/session-backup-$disp-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$bk"
   local n=0
   for r in "${rels[@]}"; do
@@ -561,11 +595,17 @@ cmd_session_restore() {
     [ -e "$payload" ] || { warn "archive has no payload for ~/$r — skipped"; continue; }
     slug="$(printf '%s' "$r" | tr '/' '_')"
     mkdir -p "$(dirname "$dest")"
-    [ -e "$dest" ] && mv "$dest" "$bk/$slug"
-    if mv "$payload" "$dest"; then n=$((n+1)); else
-      warn "restore of ~/$r failed — rolling back"; [ -e "$bk/$slug" ] && mv "$bk/$slug" "$dest"
+    if [ "$merge" = 1 ] && [ -d "$payload" ] && [ -d "$dest" ]; then
+      if ditto "$payload" "$dest" 2>/dev/null || cp -R "$payload"/. "$dest"/ 2>/dev/null; then n=$((n+1))
+      else warn "merge into ~/$r failed"; fi
+    else
+      [ -e "$dest" ] && mv "$dest" "$bk/$slug"
+      if mv "$payload" "$dest"; then n=$((n+1)); else
+        warn "restore of ~/$r failed — rolling back"; [ -e "$bk/$slug" ] && mv "$bk/$slug" "$dest"
+      fi
     fi
   done
+  rmdir "$bk" 2>/dev/null || true
   rm -rf "$tmp"
   info "restored $n session item(s) for '$disp'"
   info "previous files staged at: ${bk/#$HOME/~}"
@@ -581,15 +621,15 @@ generic_data_paths() { # $1 = .app path → data locations that exist (deduped)
   bid="$(plist_get "$app" CFBundleIdentifier)"; [ -n "$bid" ] || return 1
   emit() { case "$out" in *"|$1|"*) ;; *) out="$out|$1|"; printf '%s\n' "$1";; esac; }
   for n in "$(plist_get "$app" CFBundleName)" "$(basename "$app" .app)" "$bid"; do
-    [ -n "$n" ] && [ -d "$AS_DIR/$n" ] && emit "$AS_DIR/$n"
+    if [ -n "$n" ] && [ -d "$AS_DIR/$n" ]; then emit "$AS_DIR/$n"; fi
   done
-  [ -d "$HOME/Library/Containers/$bid/Data" ] && emit "$HOME/Library/Containers/$bid/Data"
+  if [ -d "$HOME/Library/Containers/$bid/Data" ]; then emit "$HOME/Library/Containers/$bid/Data"; fi
   for d in "$HOME/Library/Group Containers"/*; do
     [ -d "$d" ] || continue
     case "$(basename "$d")" in *"$bid"*) emit "$d";; esac
   done
   for p in "$HOME/Library/HTTPStorages/$bid" "$HOME/Library/WebKit/$bid" "$HOME/Library/Preferences/$bid.plist"; do
-    [ -e "$p" ] && emit "$p"
+    if [ -e "$p" ]; then emit "$p"; fi
   done
   # Home dotfolders — where CLI-style apps actually keep their work sessions
   # (~/.codex for ChatGPT/Codex, ~/.claude for Claude, ~/.antigravity, …). Missing these meant an
@@ -598,8 +638,9 @@ generic_data_paths() { # $1 = .app path → data locations that exist (deduped)
   for n in "$(basename "$app" .app)" "$(plist_get "$app" CFBundleName)" "${bid##*.}"; do
     [ -n "$n" ] || continue
     cand="$(printf '%s' "$n" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
-    [ -d "$HOME/.$cand" ] && emit "$HOME/.$cand"
+    if [ -d "$HOME/.$cand" ]; then emit "$HOME/.$cand"; fi
   done
+  return 0
 }
 
 cmd_app_export() {
