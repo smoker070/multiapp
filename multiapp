@@ -217,6 +217,59 @@ backup_spec() {
 # Any installed app with local data can be backed up — a curated spec just gives better cache excludes.
 # Without this, apps the user installs later (Hermes, anything scanned) were missing from the backup
 # list even though app-export handled them fine.
+# Does this app actually hold a LOGIN worth backing up? Keeps Sublime Text / Numbers / Xcode / OBS out
+# of the backup list. Note: keychain-access-groups alone is a weak signal — Apple's own apps (Numbers,
+# Xcode) declare it for iCloud — so it only counts for non-Apple bundles.
+app_has_login() { # $1 = .app path
+  local app="$1" bid n base ck d
+  bid="$(plist_get "$app" CFBundleIdentifier)"; [ -n "$bid" ] || return 1
+  base="$(basename "$app" .app)"
+  n="$(plist_get "$app" CFBundleName)"; [ -n "$n" ] || n="$base"
+  # 1. Electron/Chromium credential encryption key → the app stores credentials
+  security find-generic-password -s "$n Safe Storage" >/dev/null 2>&1 && return 0
+  [ "$base" != "$n" ] && security find-generic-password -s "$base Safe Storage" >/dev/null 2>&1 && return 0
+  # 1b. an auth/token file in the app's home dotfolder (~/.codex/auth.json, ~/.hermes/…)
+  for d in "$HOME/.$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]' | tr -d ' ')" \
+           "$HOME/.$(printf '%s' "${bid##*.}" | tr '[:upper:]' '[:lower:]')"; do
+    [ -d "$d" ] || continue
+    find "$d" -maxdepth 2 \( -iname "auth*" -o -iname "*token*" -o -iname "credential*" -o -iname "session*" \) \
+      2>/dev/null | head -1 | grep -q . && return 0
+  done
+  # 2. a cookie store that actually has cookies (Chromium or Gecko) — check both name forms
+  ck="$(find "$AS_DIR/$n" "$AS_DIR/$base" -maxdepth 3 \( -name Cookies -o -name cookies.sqlite \) -type f 2>/dev/null | head -1 || true)"
+  if [ -n "$ck" ] && [ -s "$ck" ]; then
+    /usr/bin/python3 -c "
+import sqlite3,shutil,tempfile,os,sys
+t=tempfile.mktemp()
+try:
+    shutil.copy('$ck',t); c=sqlite3.connect(t)
+    n=0
+    for tbl in ('cookies','moz_cookies'):
+        try: n=c.execute('select count(*) from '+tbl).fetchone()[0]; break
+        except sqlite3.OperationalError: pass
+    c.close(); sys.exit(0 if n else 1)
+except Exception: sys.exit(1)
+finally:
+    try: os.unlink(t)
+    except Exception: pass" 2>/dev/null && return 0
+  fi
+  # 3. Telegram Desktop's own key store (its CFBundleName is just "Telegram", so check both)
+  { [ -d "$AS_DIR/$n/tdata" ] || [ -d "$AS_DIR/$base/tdata" ]; } && return 0
+  # 3b. an Electron app with populated web storage — GitHub Desktop and Antigravity keep their
+  # session in Local Storage rather than cookies, so a cookie-only test misses them
+  if [ -d "$app/Contents/Frameworks/Electron Framework.framework" ]; then
+    for d in "$AS_DIR/$n" "$AS_DIR/$base"; do
+      [ -d "$d" ] || continue
+      find "$d/Local Storage" "$d/IndexedDB" -type f -size +1k 2>/dev/null | head -1 | grep -q . && return 0
+    done
+  fi
+  # 4. declares a Keychain token AND isn't an Apple app (Numbers/Xcode declare it for iCloud)
+  case "$bid" in com.apple.*) ;; *)
+    codesign -d --entitlements :- "$app" 2>/dev/null | grep -q keychain-access-groups && return 0 ;;
+  esac
+  return 1
+}
+
 generic_backup_spec() { # $1 = registry key OR app name/path
   local app; app="$(resolve_app_path "$1" 2>/dev/null)" || return 1
   local any=0 p
@@ -252,6 +305,26 @@ app_is_running() { # $1 = registry key OR app name/path → 0 if running
 }
 
 cmd_migratelist() {
+  local raw=0 refresh=0 a
+  for a in "$@"; do case "$a" in --raw) raw=1;; --refresh) refresh=1;; esac; done
+  # Scanning every installed app costs seconds (codesign/security/sqlite per app), which made the
+  # menu-bar app hang on every click. Serve --raw from a cache; refresh explicitly or when stale.
+  local cache="$ROOT/migrate-cache"
+  if [ "$raw" = 1 ] && [ "$refresh" = 0 ] && [ -s "$cache" ]; then cat "$cache"; return 0; fi
+  if [ "$raw" = 1 ]; then
+    mkdir -p "$ROOT"
+    local tmpf; tmpf="$(mktemp)"
+    if migratelist_scan --raw > "$tmpf" 2>/dev/null && [ -s "$tmpf" ]; then
+      mv "$tmpf" "$cache" 2>/dev/null || cp "$tmpf" "$cache" 2>/dev/null || true
+    fi
+    rm -f "$tmpf" 2>/dev/null || true
+    cat "$cache" 2>/dev/null || true
+    return 0
+  fi
+  migratelist_scan
+}
+
+migratelist_scan() {
   local raw=0; [ "${1:-}" = "--raw" ] && raw=1
   [ "$raw" = 1 ] || printf '%-20s %-14s %-11s %s\n' "APP" "VERDICT" "AUTH" "SAME-MAC BACKUP"
   # curated registry entries first (better cache excludes), then every OTHER installed app that has
@@ -264,11 +337,14 @@ cmd_migratelist() {
     | grep -vx "Multiapp" | while IFS= read -r key; do
     [ -n "$key" ] || continue
     local spec; spec="$(full_backup_spec "$key" 2>/dev/null)" || continue
-    local v a first
+    local v a first ap
     v="$(printf '%s\n' "$spec" | awk '$1=="V"{print $2;exit}')"
     a="$(printf '%s\n' "$spec" | awk '$1=="A"{print $2;exit}')"
     first="$(printf '%s\n' "$spec" | awk '$1=="D"{sub(/^D /,"");print;exit}')"
     [ -n "$first" ] && [ -e "$first" ] || continue    # only apps with data present on this machine
+    # …and only apps that actually hold a login — Sublime Text / Numbers / Xcode don't belong here
+    ap="$(resolve_app_path "$key" 2>/dev/null || true)"
+    { [ -n "$ap" ] && app_has_login "$ap"; } || continue
     if [ "$raw" = 1 ]; then printf '%s|%s|%s\n' "$key" "$v" "$a"       # key|verdict|authlocus (for the GUI)
     else printf '%-20s %-14s %-11s %s\n' "$key" "$v" "$a" "backup available"; fi
   done

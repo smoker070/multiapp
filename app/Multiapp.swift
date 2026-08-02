@@ -259,6 +259,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         statusItem.menu = menu
         rebuild()
+        // Warm the backup-list cache off the main thread: building it scans every installed app and
+        // takes seconds, which would otherwise stall the first click on the tray icon.
+        DispatchQueue.global(qos: .utility).async { _ = CLI.run(["migrate-list", "--raw", "--refresh"]) }
     }
 
     func menuWillOpen(_ menu: NSMenu) { rebuild() }
