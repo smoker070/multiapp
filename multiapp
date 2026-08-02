@@ -214,10 +214,26 @@ backup_spec() {
   esac
 }
 
+# Any installed app with local data can be backed up — a curated spec just gives better cache excludes.
+# Without this, apps the user installs later (Hermes, anything scanned) were missing from the backup
+# list even though app-export handled them fine.
+generic_backup_spec() { # $1 = registry key OR app name/path
+  local app; app="$(resolve_app_path "$1" 2>/dev/null)" || return 1
+  local any=0 p
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    [ "$any" = 0 ] && { printf 'V full-samemac\nA unknown\n'; any=1; }
+    printf 'D %s\n' "$p"
+  done < <(generic_data_paths "$app" 2>/dev/null)
+  [ "$any" = 1 ] || return 1
+  printf 'X Cache\nX Caches\nX Code Cache\nX GPUCache\nX DawnGraphiteCache\nX DawnWebGPUCache\nX Crashpad\nX logs\nX Logs\nX vm_bundles\nX user_data*\nX emoji\n'
+  return 0
+}
+
 # full spec = app-specific paths + standard per-bundle-ID session/settings paths, de-duplicated
 # (an app spec may already list e.g. HTTPStorages; tarring the same root twice would duplicate it)
 full_backup_spec() {
-  backup_spec "$1" || return 1
+  if ! backup_spec "$1" 2>/dev/null; then generic_backup_spec "$1"; return $?; fi
   local seen; seen="$(backup_spec "$1" 2>/dev/null | awk '$1=="D"{sub(/^D /,"");print}')"
   standard_paths "$1" | while IFS= read -r line; do
     local p="${line#D }"
@@ -225,27 +241,36 @@ full_backup_spec() {
   done
 }
 
-app_is_running() { # $1 = registry key → 0 if running
+app_is_running() { # $1 = registry key OR app name/path → 0 if running
   # Match the running process by its BUNDLE PATH, not by name. AppleScript's
   # `application "X" is running` needs Automation permission (which a GUI caller may not have) and
   # is ambiguous when two apps share an executable name — e.g. ChatGPT vs ChatGPT Classic.
-  local path; path="$(reg_field "$1" 2)"; [ -n "$path" ] || return 1
+  local path; path="$(reg_field "$1" 2)"
+  [ -n "$path" ] || path="$(resolve_app_path "$1" 2>/dev/null || true)"
+  [ -n "$path" ] || return 1
   ps -eo args 2>/dev/null | grep -F "$path/Contents/MacOS/" | grep -qv grep
 }
 
 cmd_migratelist() {
   local raw=0; [ "${1:-}" = "--raw" ] && raw=1
-  [ "$raw" = 1 ] || printf '%-18s %-14s %-11s %s\n' "APP" "VERDICT" "AUTH" "SAME-MAC BACKUP"
-  full_registry | while IFS='|' read -r key path name adapter verdict note; do
+  [ "$raw" = 1 ] || printf '%-20s %-14s %-11s %s\n' "APP" "VERDICT" "AUTH" "SAME-MAC BACKUP"
+  # curated registry entries first (better cache excludes), then every OTHER installed app that has
+  # local data — so an app installed later still shows up without needing a hand-written spec.
+  # Dedupe by the resolved BUNDLE PATH: the same app otherwise appears twice, once under its registry
+  # key ("claude") and once under its display name ("Claude").
+  { full_registry | awk -F'|' 'NF>1{print $1"|"$2}'
+    cmd_list_installed
+  } | awk -F'|' 'NF>1 && $2!="" && !seen[$2]++ {print $1}' \
+    | grep -vx "Multiapp" | while IFS= read -r key; do
     [ -n "$key" ] || continue
-    local spec; spec="$(backup_spec "$key" 2>/dev/null)" || { continue; }
+    local spec; spec="$(full_backup_spec "$key" 2>/dev/null)" || continue
     local v a first
     v="$(printf '%s\n' "$spec" | awk '$1=="V"{print $2;exit}')"
     a="$(printf '%s\n' "$spec" | awk '$1=="A"{print $2;exit}')"
     first="$(printf '%s\n' "$spec" | awk '$1=="D"{sub(/^D /,"");print;exit}')"
-    [ -e "$first" ] || continue          # only apps with data present on this machine
+    [ -n "$first" ] && [ -e "$first" ] || continue    # only apps with data present on this machine
     if [ "$raw" = 1 ]; then printf '%s|%s|%s\n' "$key" "$v" "$a"       # key|verdict|authlocus (for the GUI)
-    else printf '%-18s %-14s %-11s %s\n' "$key" "$v" "$a" "backup available"; fi
+    else printf '%-20s %-14s %-11s %s\n' "$key" "$v" "$a" "backup available"; fi
   done
   [ "$raw" = 1 ] || { info ""; info "same-machine restore is FULL (login included). moving to another Mac = content + re-login."; }
 }
@@ -266,7 +291,7 @@ cmd_backup() {
 
   local verdict; verdict="$(printf '%s\n' "$spec" | awk '$1=="V"{print $2;exit}')"
   local locus;   locus="$(printf '%s\n' "$spec" | awk '$1=="A"{print $2;exit}')"
-  local ver;     ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$(reg_field "$key" 2)/Contents/Info.plist" 2>/dev/null || echo unknown)"
+  local ver;     ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$(resolve_app_path "$key" 2>/dev/null)/Contents/Info.plist" 2>/dev/null || echo unknown)"
   local desk="$HOME/Desktop"; [ -d "$desk" ] || desk="$HOME"
   [ -n "$out" ] || out="$desk/multiapp-backup-${key}-$(date +%Y%m%d-%H%M%S).tar.gz"
 
@@ -328,7 +353,7 @@ cmd_restore() {
   tar -xzf "$file" -C "$tmp" 2>/dev/null || { rm -rf "$tmp"; die "cannot extract archive"; }
   local man="$tmp/manifest.json"
   local aver; aver="$(/usr/bin/python3 -c "import json;print(json.load(open('$man')).get('appVersion','?'))" 2>/dev/null)"
-  local iver; iver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$(reg_field "$key" 2)/Contents/Info.plist" 2>/dev/null || echo unknown)"
+  local iver; iver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$(resolve_app_path "$key" 2>/dev/null)/Contents/Info.plist" 2>/dev/null || echo unknown)"
   [ "$aver" != "$iver" ] && warn "archive is from $key $aver; installed is $iver — restore anyway if you accept possible format drift"
 
   # members are stored relative to $HOME → map straight back under THIS user's home
