@@ -137,8 +137,22 @@ require_app() { # $1=key → echoes app path
 
 profile_dir() { printf '%s/%s/%s' "$PROFILES" "$1" "$2"; }
 
-running_pids() { # $1=profile dir → pids of ANY process bound to this profile
-  ps -eo pid,args 2>/dev/null | grep -F -- "--user-data-dir=$1" | grep -v grep | awk '{print $1}'
+running_pids() { # $1=profile dir → pids of ANY process bound to THIS profile
+  # Must match the flag value EXACTLY. A plain substring match makes a profile named "work" match
+  # the live process of "work2" (…/work is a prefix of …/work2/data), so `list` reported stopped
+  # profiles as running and delete/clone/rename refused on them. Verified and fixed 2026-08-19.
+  # The value ends at end-of-line or at the space before the next argument.
+  # NB: the needle is assembled INSIDE awk. If it were passed whole via -v, awk's own command line
+  # would contain it and awk would match itself (the old code needed `grep -v grep` for the same
+  # reason). Passing only the directory keeps the full flag string out of our own argv.
+  ps -eo pid,args 2>/dev/null | awk -v d="$1" '
+    BEGIN { n = "--user-data-dir=" d }
+    { i = index($0, n)
+      if (i > 0) {
+        nxt = substr($0, i + length(n), 1)
+        if (nxt == "" || nxt == " ") print $1
+      }
+    }'
 }
 
 main_pid() { # $1=app path $2=profile dir → pid of the main process only
