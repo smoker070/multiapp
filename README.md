@@ -10,7 +10,7 @@ is the same on every OS; only the plumbing (launch command, paths, shortcuts) di
 | File | Platform | Status |
 |---|---|---|
 | `multiapp` (bash) | **macOS** + **Linux** | macOS fully tested; Linux implemented per multigravity's verified patterns, **pending a real Linux test** |
-| `multiapp.ps1` (PowerShell) | **Windows** | implemented per the verified mechanism + multigravity.ps1 conventions, **pending a real Windows test** (not even syntax-checkable on this Mac) |
+| `multiapp.ps1` (PowerShell) | **Windows** | **profile commands only** (~half the CLI) and **never run on real Windows**. Read [WINDOWS.md](WINDOWS.md) first — it lists the known defects. The backup/session/export commands do not exist there yet |
 | `app/Multiapp.swift` + `app/build.sh` | **macOS menu-bar app** (v0.3.0) | built with plain `swiftc` (no Xcode), ad-hoc signed; installs to `~/Applications/Multiapp.app`, DMG in `app/dist/`. Thin GUI over the CLI: profile list with running state, launch/stop, rename/clone/export/delete, New Profile dialog, **Back Up & Restore** submenu, **Export/Import App Data**, Claude session transfer, rescan. Reads `list --raw` / `migrate-list --raw` (cached) so the menu opens instantly |
 
 ## Move-proof install (the `multiapp` command)
