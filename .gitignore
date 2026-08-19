@@ -27,3 +27,7 @@ migrate-cache
 
 # Claude Code / agent tool state (contains local absolute paths)
 .claude/
+
+# Rust build output (gigabytes — never commit)
+rust/target/
+**/*.rs.bk

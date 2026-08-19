@@ -1,0 +1,105 @@
+name: ci
+
+# Why this exists: the maintainer develops on macOS and has no Windows machine. This workflow is the
+# Windows test bed — it does not merely compile, it RUNS the integration test against a real Chromium
+# app (Edge, pre-installed on the runner). "It builds" was never evidence that it works.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: rust
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false          # a Windows-only failure must not hide a Linux-only one
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable   # pinned action, floating toolchain
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Unit tests
+        run: cargo test --lib
+
+      # The important one. On Windows this drives Edge; on Linux it skips unless a browser is present.
+      - name: Integration test against a real app
+        run: cargo test --test live_app -- --nocapture
+        timeout-minutes: 10
+
+  build:
+    name: build (${{ matrix.target }})
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: multiapp.exe
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: multiapp
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: multiapp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Build release
+        run: cargo build --release --bin multiapp
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/release/${{ matrix.artifact }}" "dist/multiapp-${{ matrix.target }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: multiapp-${{ matrix.target }}
+          path: rust/dist/*
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write            # required to create a release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
