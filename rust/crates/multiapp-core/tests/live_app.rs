@@ -62,6 +62,12 @@ fn launch_isolates_then_stops_gracefully() {
         // A CI runner has no real GPU; Chromium's GPU init can stall there.
         extra.push("--disable-gpu".to_string());
     }
+    if cfg!(target_os = "linux") {
+        // A Linux CI runner has no X display, so Chrome cannot open a window at all. Headless is safe
+        // HERE and only here: graceful quit on Linux is SIGTERM, which needs no window. It would NOT
+        // be safe on Windows, where graceful quit is WM_CLOSE — a windowless process never gets it.
+        extra.push("--headless=new".to_string());
+    }
     eprintln!("app  = {}", app.display());
     eprintln!("data = {}", data.display());
     profile::launch_profile(app.to_str().unwrap(), app_key, name, &extra).expect("launch");
