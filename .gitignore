@@ -24,3 +24,6 @@ multiapp-export-*
 multiapp-session-*
 registry.local
 migrate-cache
+
+# Claude Code / agent tool state (contains local absolute paths)
+.claude/
