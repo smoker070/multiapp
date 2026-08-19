@@ -7,7 +7,7 @@
 # No binaries are modified. No env overrides needed. Keychain is never touched.
 set -euo pipefail
 
-VERSION="0.2.0"
+VERSION="0.3.0"
 
 # ================================================================ platform layer
 case "$(uname -s)" in

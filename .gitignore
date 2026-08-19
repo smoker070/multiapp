@@ -12,3 +12,15 @@ Icon?
 .vscode/
 .idea/
 *.swp
+
+# Backup / export archives — these can contain a LIVE LOGIN SESSION.
+# The tool itself warns "treat it like a password"; never let one get committed.
+*.tar.gz
+*.tgz
+*.zip
+*.dmg
+multiapp-backup-*
+multiapp-export-*
+multiapp-session-*
+registry.local
+migrate-cache

@@ -1,4 +1,4 @@
-# multiapp — prototype CLI (v0.2.0)
+# multiapp — prototype CLI (v0.3.0)
 
 Run multiple isolated profiles of installed apps. Implements the mechanism verified in Phase 0
 (`../experiments/`): launch the app with `--user-data-dir=<profile>` (**equals form**) — no binary
@@ -11,11 +11,11 @@ is the same on every OS; only the plumbing (launch command, paths, shortcuts) di
 |---|---|---|
 | `multiapp` (bash) | **macOS** + **Linux** | macOS fully tested; Linux implemented per multigravity's verified patterns, **pending a real Linux test** |
 | `multiapp.ps1` (PowerShell) | **Windows** | implemented per the verified mechanism + multigravity.ps1 conventions, **pending a real Windows test** (not even syntax-checkable on this Mac) |
-| `app/Multiapp.swift` + `app/build.sh` | **macOS menu-bar app** (v0.1.0) | built with plain `swiftc` (no Xcode), ad-hoc signed; installs to `~/Applications/Multiapp.app`, DMG in `app/dist/`. Thin GUI over the CLI: profile list with running state, launch/stop, New Profile dialog, rescan, Dock-launcher creation, reveal-in-Finder. Uses `multiapp list --raw` (fast path, no `du`) |
+| `app/Multiapp.swift` + `app/build.sh` | **macOS menu-bar app** (v0.3.0) | built with plain `swiftc` (no Xcode), ad-hoc signed; installs to `~/Applications/Multiapp.app`, DMG in `app/dist/`. Thin GUI over the CLI: profile list with running state, launch/stop, rename/clone/export/delete, New Profile dialog, **Back Up & Restore** submenu, **Export/Import App Data**, Claude session transfer, rescan. Reads `list --raw` / `migrate-list --raw` (cached) so the menu opens instantly |
 
 ## Move-proof install (the `multiapp` command)
 
-Run once (already done on this Mac):
+Run once:
 ```bash
 "<path>/prototype/multiapp" install-stub
 ```
@@ -43,9 +43,15 @@ Example: a profile named `second` holding a second Claude account —
 
 ## Commands
 
-`apps · scan · new · launch · list · stop · clone · rename · delete · trash · wrapper · probe ·
-install-stub · doctor · help` — plus Claude-only session ops (`sessions · transfer · export · import`)
-and app **backup/restore** (`migrate-list · backup · restore`), all on macOS/Linux.
+**Profiles:** `apps · scan · probe · new · launch · list · stop · clone · rename · delete · trash ·
+wrapper · install-stub · doctor · help`  (aliases: `ls`=list, `mv`=rename, `rm`=delete)
+
+**App data & logins:** `migrate-list · backup · restore · app-export · app-import ·
+session-check · session-backup · session-restore · list-installed`
+
+**Claude Code sessions:** `sessions · transfer · export · import`
+
+Everything outside the profile group is macOS/Linux today — see the platform table above.
 
 | Command | Notes |
 |---|---|
@@ -71,7 +77,8 @@ and app **backup/restore** (`migrate-list · backup · restore`), all on macOS/L
 | App type | What the archive holds | Verified |
 |---|---|---|
 | Electron/Chromium (Claude, Notion, ChatGPT, Chrome, VS Code) | the session files (`Cookies`, `Local State`, `Local Storage`, `IndexedDB`) — but the cookies are **encrypted** (`v10` prefix) with a key that lives in the **Keychain**, which is *not* in the archive | ✅ inspected |
-| Native (ChatGPT Classic, Gemini, Telegram) | **no session files at all** — the auth token lives only in the Keychain | ✅ inspected |
+| Native, Keychain-token (ChatGPT Classic, Gemini, **Telegram for macOS**) | **no usable session files** — the token lives only in the Keychain. Verified by experiment: deleting every session file left Gemini still signed in | ✅ verified |
+| **Telegram Desktop** (`com.tdesktop.Telegram`) | different from Telegram for macOS: its login lives in `tdata`, **its own encrypted key store, not the Keychain** — so this one is the best cross-machine candidate | ✅ inspected |
 
 Either way the login is only usable where its **Keychain** is:
 
@@ -84,9 +91,9 @@ Either way the login is only usable where its **Keychain** is:
 login keychain too, so that case behaves like a new machine unless you also restore the Keychain
 (Migration Assistant / Time Machine do that; Multiapp deliberately never touches Keychain items).
 
-`migrate-list` marks each app `full-samemac` or `experimental` (data locations known, but decrypt-after-
-move to a *different* machine unverified — currently Telegram and Gemini). Multiapp never touches
-Keychain items; that's precisely why logins don't migrate.
+`migrate-list` only lists apps that actually hold a **login** (so Sublime Text, Numbers, Xcode and
+friends are filtered out) and marks each `full-samemac`. Multiapp never touches Keychain or Credential
+Manager items — that is precisely why logins don't migrate to another machine.
 
 ## Storage (per platform)
 

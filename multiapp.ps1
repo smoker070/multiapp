@@ -15,7 +15,7 @@ param([Parameter(Position=0)][string]$Command = "help",
       [Parameter(ValueFromRemainingArguments=$true)][string[]]$Rest)
 
 $ErrorActionPreference = "Stop"
-$VERSION = "0.2.0"
+$VERSION = "0.3.0"
 
 $Root      = if ($env:MULTIAPP_HOME) { $env:MULTIAPP_HOME } else { Join-Path $env:APPDATA "Multiapp" }
 $Profiles  = Join-Path $Root "Profiles"

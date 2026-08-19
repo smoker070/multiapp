@@ -1,4 +1,4 @@
-// Multiapp — macOS menu-bar app (v0.1.0)
+// Multiapp — macOS menu-bar app (v0.3.0)
 // Thin GUI over the `multiapp` CLI engine (the CLI stays the source of truth).
 // Build: see build.sh in this folder. No Xcode required — plain swiftc + AppKit.
 import AppKit
@@ -340,7 +340,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(make("Import App Data…", #selector(importAppData(_:))))
         menu.addItem(make("Rescan Installed Apps", #selector(rescan(_:))))
         menu.addItem(.separator())
-        let v = NSMenuItem(title: "Multiapp v0.2", action: nil, keyEquivalent: "")
+        let v = NSMenuItem(title: "Multiapp v0.3.0", action: nil, keyEquivalent: "")
         v.isEnabled = false
         if let ic = NSApp.applicationIconImage.copy() as? NSImage {
             ic.size = NSSize(width: 16, height: 16)

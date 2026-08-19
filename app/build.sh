@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APPVER="0.2.0"
+APPVER="0.3.0"
 BUILD="build"
 APP="$BUILD/Multiapp.app"
 DIST="dist"
