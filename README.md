@@ -92,9 +92,16 @@ Either way the login is only usable where its **Keychain** is:
 login keychain too, so that case behaves like a new machine unless you also restore the Keychain
 (Migration Assistant / Time Machine do that; Multiapp deliberately never touches Keychain items).
 
-`migrate-list` only lists apps that actually hold a **login** (so Sublime Text, Numbers, Xcode and
-friends are filtered out) and marks each `full-samemac`. Multiapp never touches Keychain or Credential
-Manager items — that is precisely why logins don't migrate to another machine.
+`migrate-list` only lists apps that hold a **saved session** (so Sublime Text, Numbers and Xcode are
+filtered out), and its `SESSION` column says what kind was found — `cookies (encrypted)`,
+`cookies (plaintext)`, `account file`, `login lives in the Keychain`. It reports what is on disk and
+does **not** guess whether you have an account there: telling an account apart from ordinary website
+state needs the cookie *values*, which Multiapp never reads. `session-check <app>` shows which **sites**
+the cookies belong to, which is what actually answers the question — `.claude.ai` and
+`app.notion.com` are a login; twelve HDRezka mirror domains plus ad trackers are not.
+
+Multiapp never touches Keychain or Credential Manager items — that is precisely why logins don't
+migrate to another machine.
 
 ## Storage (per platform)
 

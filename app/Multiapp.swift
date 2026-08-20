@@ -72,14 +72,31 @@ struct CLI {
         }
     }
 
-    struct BackupApp { let key: String; let verdict: String; let authLocus: String }
+    struct BackupApp { let key: String; let verdict: String; let evidence: String }
+
+    /// Human wording for a `session_evidence` value. Deliberately states only what was FOUND — the
+    /// tool cannot tell an account from ordinary website state without reading cookie values, and it
+    /// does not read them. Notion Calendar settles the point: 43 plaintext cookies, .identity.notion.so
+    /// among them, so "plaintext" never means "not a login".
+    static func sessionLabel(_ e: String) -> String {
+        switch e {
+        case "account-file":  return "account file"
+        case "tdata":         return "account store"
+        case "cookies-enc":   return "cookies (encrypted)"
+        case "cookies-plain": return "cookies (plaintext)"
+        case "webstorage":    return "local web data"
+        case "keychain":      return "login lives in the Keychain"
+        case "enc-store":     return "no session files found"
+        default:              return e
+        }
+    }
 
     /// Apps whose real data can be backed up on this machine (from `migrate-list --raw`).
     static func backupApps() -> [BackupApp] {
         run(["migrate-list", "--raw"]).out.split(separator: "\n").compactMap {
             let f = $0.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
             guard f.count >= 3 else { return nil }
-            return BackupApp(key: f[0], verdict: f[1], authLocus: f[2])
+            return BackupApp(key: f[0], verdict: f[1], evidence: f[2])
         }
     }
 
@@ -324,6 +341,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let appItem = NSMenuItem(title: b.verdict == "experimental" ? "\(disp)  (experimental)" : disp,
                                      action: nil, keyEquivalent: "")
             let appSub = NSMenu()
+            // Say WHY this app is in the list. Without it the list reads as "apps you log into", which
+            // sent the user hunting for HDRezka-Client's non-existent sign-in screen.
+            let what = NSMenuItem(title: "saved: \(CLI.sessionLabel(b.evidence))", action: nil, keyEquivalent: "")
+            what.isEnabled = false
+            appSub.addItem(what)
+            appSub.addItem(NSMenuItem.separator())
+            appSub.addItem(make("What's Saved?…", #selector(sessionCheckApp(_:)), rep: b.key))
             appSub.addItem(make("Back Up…", #selector(backupApp(_:)), rep: b.key))
             appSub.addItem(make("Restore…", #selector(restoreApp(_:)), rep: b.key))
             appItem.submenu = appSub
@@ -656,6 +680,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 .filter { !$0.hasPrefix("scanning") }
                 .joined(separator: "\n")
             self.alertAsync("Scan finished", cleaned)
+        }
+    }
+
+    /// Show the session-check report, including which SITES the cookies belong to — the thing that
+    /// actually tells a person whether a login is involved.
+    @objc func sessionCheckApp(_ s: NSMenuItem) {
+        guard let key = s.representedObject as? String else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let r = CLI.run(["session-check", key])
+            let body = (r.out + r.err).trimmingCharacters(in: .whitespacesAndNewlines)
+            self.alertAsync("What's saved for \(key)",
+                            body.isEmpty ? "Nothing reported — the app may store nothing locally." : body)
         }
     }
 

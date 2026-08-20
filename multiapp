@@ -231,57 +231,168 @@ backup_spec() {
 # Any installed app with local data can be backed up — a curated spec just gives better cache excludes.
 # Without this, apps the user installs later (Hermes, anything scanned) were missing from the backup
 # list even though app-export handled them fine.
-# Does this app actually hold a LOGIN worth backing up? Keeps Sublime Text / Numbers / Xcode / OBS out
-# of the backup list. Note: keychain-access-groups alone is a weak signal — Apple's own apps (Numbers,
-# Xcode) declare it for iCloud — so it only counts for non-Apple bundles.
-app_has_login() { # $1 = .app path
-  local app="$1" bid n base ck d
-  bid="$(plist_get "$app" CFBundleIdentifier)"; [ -n "$bid" ] || return 1
-  base="$(basename "$app" .app)"
-  n="$(plist_get "$app" CFBundleName)"; [ -n "$n" ] || n="$base"
-  # 1. Electron/Chromium credential encryption key → the app stores credentials
-  security find-generic-password -s "$n Safe Storage" >/dev/null 2>&1 && return 0
-  [ "$base" != "$n" ] && security find-generic-password -s "$base Safe Storage" >/dev/null 2>&1 && return 0
-  # 1b. an auth/token file in the app's home dotfolder (~/.codex/auth.json, ~/.hermes/…)
-  for d in "$HOME/.$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]' | tr -d ' ')" \
-           "$HOME/.$(printf '%s' "${bid##*.}" | tr '[:upper:]' '[:lower:]')"; do
-    [ -d "$d" ] || continue
-    find "$d" -maxdepth 2 \( -iname "auth*" -o -iname "*token*" -o -iname "credential*" -o -iname "session*" \) \
-      2>/dev/null | head -1 | grep -q . && return 0
-  done
-  # 2. a cookie store that actually has cookies (Chromium or Gecko) — check both name forms
-  ck="$(find "$AS_DIR/$n" "$AS_DIR/$base" -maxdepth 3 \( -name Cookies -o -name cookies.sqlite \) -type f 2>/dev/null | head -1 || true)"
-  if [ -n "$ck" ] && [ -s "$ck" ]; then
-    /usr/bin/python3 -c "
+# Classify a cookie store: enc | plain | empty | unknown.
+# Reads BOTH value columns. Chromium puts a cookie's value in `value` when it is NOT OS-encrypted and
+# in `encrypted_value` when it is; inspecting only the encrypted column reported HDRezka-Client's 131
+# plaintext cookies as an empty store, which then surfaced as "no readable cookie store".
+cookie_store_kind() { # $1 = path to Cookies / cookies.sqlite
+  /usr/bin/python3 -c "
 import sqlite3,shutil,tempfile,os,sys
 t=tempfile.mktemp()
 try:
-    shutil.copy('$ck',t); c=sqlite3.connect(t)
-    n=0
-    for tbl in ('cookies','moz_cookies'):
-        try: n=c.execute('select count(*) from '+tbl).fetchone()[0]; break
-        except sqlite3.OperationalError: pass
-    c.close(); sys.exit(0 if n else 1)
-except Exception: sys.exit(1)
+    shutil.copy(sys.argv[1],t); c=sqlite3.connect(t)
+    try:
+        rows=c.execute('select value, encrypted_value from cookies').fetchall()
+        enc=[e for _,e in rows if e]
+        # The v10/v11 tag MUST be compared in Python: SQLite's substr() on a BLOB is a BLOB, and a BLOB
+        # never compares equal to a TEXT literal, so doing this in SQL silently matches nothing.
+        if any(bytes(e[:3]) in (b'v10',b'v11') for e in enc):  v='enc'
+        elif enc:                                              v='enc'   # opaque blob, unknown tag: assume protected
+        elif any(val for val,_ in rows):                       v='plain'
+        else:                                                  v='empty'
+    except sqlite3.OperationalError:      # Gecko keeps values in the clear
+        n=c.execute('select count(*) from moz_cookies').fetchone()[0]
+        v='plain' if n else 'empty'
+    c.close(); print(v)
+except Exception: print('unknown')
 finally:
     try: os.unlink(t)
-    except Exception: pass" 2>/dev/null && return 0
-  fi
-  # 3. Telegram Desktop's own key store (its CFBundleName is just "Telegram", so check both)
-  { [ -d "$AS_DIR/$n/tdata" ] || [ -d "$AS_DIR/$base/tdata" ]; } && return 0
-  # 3b. an Electron app with populated web storage — GitHub Desktop and Antigravity keep their
-  # session in Local Storage rather than cookies, so a cookie-only test misses them
-  if [ -d "$app/Contents/Frameworks/Electron Framework.framework" ]; then
-    for d in "$AS_DIR/$n" "$AS_DIR/$base"; do
-      [ -d "$d" ] || continue
-      find "$d/Local Storage" "$d/IndexedDB" -type f -size +1k 2>/dev/null | head -1 | grep -q . && return 0
-    done
-  fi
-  # 4. declares a Keychain token AND isn't an Apple app (Numbers/Xcode declare it for iCloud)
-  case "$bid" in com.apple.*) ;; *)
-    codesign -d --entitlements :- "$app" 2>/dev/null | grep -q keychain-access-groups && return 0 ;;
+    except Exception: pass" "$1" 2>/dev/null
+}
+
+# What SESSION evidence does this app have on disk? This replaces a boolean "does it have a login",
+# which was wrong often enough to matter: HDRezka-Client has no account and no sign-in screen, yet its
+# embedded webview accumulates website cookies exactly like a browser does, so a yes/no test cannot
+# tell it apart from Claude. This reports WHAT WAS FOUND and lets the caller and the user judge.
+#
+# Two signals that look authoritative and are not:
+#   * "<App> Safe Storage" in the Keychain — EVERY Chromium/Electron app creates one on first run to
+#     encrypt its own cookie store, signed in or not. It means "this app encrypts local data", never
+#     "you have an account here". Ranked last, and only as a hint that some store exists.
+#   * keychain-access-groups — a DECLARATION that the app may keep a token in the Keychain, not proof
+#     that one is there. Apple's own apps (Numbers, Xcode) declare it for iCloud, so it counts only
+#     for non-Apple bundles.
+#
+# Strongest file evidence first, because a credential file settles the question and cookies never do.
+# Strongest cookie evidence across ALL of an app's cookie stores → enc | plain | empty | none.
+# Notion has two: an EMPTY top-level store and the real partitioned one. Classifying whichever the
+# search happened to hit first reported "no readable cookie store" for an app that is plainly signed in.
+# Every test uses `if`, never `[ x ] && y` — see the note on session_paths for why that matters here.
+app_cookie_kind() { # $1 = .app path
+  local p k best=none
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    case "$p" in
+      */Cookies|*/cookies.sqlite)
+        if [ -f "$p" ] && [ -s "$p" ]; then
+          k="$(cookie_store_kind "$p")"
+          if [ "$k" = enc ]; then printf 'enc'; return; fi
+          if [ "$k" = plain ]; then best=plain; fi
+          if [ "$k" = empty ] && [ "$best" = none ]; then best=empty; fi
+        fi;;
+    esac
+  done < <(session_paths "$1" 2>/dev/null)
+  printf '%s' "$best"
+}
+
+# Which SITES an app's cookies belong to, one host per line. This is the part no heuristic can settle:
+# 12 hdrezka mirrors plus ad trackers is website state, .identity.notion.com is an account. Showing the
+# hosts lets the person decide instead of the tool guessing.
+# Host names ONLY — cookie values are never read or printed. They are live credentials.
+cookie_hosts() { # $1 = .app path
+  local p
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    case "$p" in
+      */Cookies|*/cookies.sqlite)
+        if [ -f "$p" ] && [ -s "$p" ]; then
+          /usr/bin/python3 -c "
+import sqlite3,shutil,tempfile,os,sys
+t=tempfile.mktemp()
+try:
+    shutil.copy(sys.argv[1],t); c=sqlite3.connect(t)
+    try:    rows=c.execute('select host_key from cookies').fetchall()
+    except sqlite3.OperationalError: rows=c.execute('select host from moz_cookies').fetchall()
+    for (h,) in rows:
+        if h: print(h)
+    c.close()
+except Exception: pass
+finally:
+    try: os.unlink(t)
+    except Exception: pass" "$p" 2>/dev/null
+        fi;;
+    esac
+  done < <(session_paths "$1" 2>/dev/null)
+}
+
+session_evidence() { # $1 = .app path
+  # → account-file | tdata | cookies-enc | cookies-plain | webstorage | keychain | enc-store | none
+  local app="$1" bid n base d p k ws=""
+  bid="$(plist_get "$app" CFBundleIdentifier)"
+  if [ -z "$bid" ]; then printf 'none'; return; fi
+  base="$(basename "$app" .app)"
+  n="$(plist_get "$app" CFBundleName)"; [ -n "$n" ] || n="$base"
+
+  # 1. Telegram Desktop's own encrypted key store — created at login, so this one IS account evidence
+  if [ -d "$AS_DIR/$n/tdata" ] || [ -d "$AS_DIR/$base/tdata" ]; then printf 'tdata'; return; fi
+
+  # 2-3. the app's OWN data, located by session_paths rather than guessed from its name. Guessing was
+  # wrong twice over: it missed Chrome entirely (its dir is "Google/Chrome", not "Google Chrome") and
+  # it read ~/.claude — which belongs to Claude Code, a different product — as the desktop app's login.
+  k="$(app_cookie_kind "$app")"
+  if [ "$k" = enc ];   then printf 'cookies-enc';   return; fi
+  if [ "$k" = plain ]; then printf 'cookies-plain'; return; fi
+
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    case "$p" in
+      */Local\ Storage|*/IndexedDB|*/Session\ Storage)
+        if [ -z "$ws" ] && [ -d "$p" ] && find "$p" -type f -size +1k 2>/dev/null | head -1 | grep -q .; then ws="$p"; fi;;
+    esac
+  done < <(session_paths "$app" 2>/dev/null)
+
+  # Electron apps that keep the session in Local Storage rather than cookies (GitHub Desktop,
+  # Antigravity) — a cookie-only test misses them entirely
+  if [ -n "$ws" ]; then printf 'webstorage'; return; fi
+
+  # 4. a credential file in a home dotfolder (~/.codex/auth.json, ~/.hermes/…). Consulted ONLY now, as
+  # a fallback for CLI-style apps with no Application Support data — reaching for it earlier is what
+  # made the Claude desktop app report Claude Code's credentials as its own.
+  for d in "$HOME/.$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]' | tr -d ' ')" \
+           "$HOME/.$(printf '%s' "${bid##*.}" | tr '[:upper:]' '[:lower:]')"; do
+    [ -d "$d" ] || continue
+    if find "$d" -maxdepth 2 \( -iname "auth*" -o -iname "*token*" -o -iname "credential*" \) \
+         2>/dev/null | head -1 | grep -q .; then printf 'account-file'; return; fi
+  done
+
+  # 5. no session files found, but the app declares Keychain storage → any login lives there, not here
+  case "$bid" in
+    com.apple.*) ;;
+    *) if codesign -d --entitlements :- "$app" 2>/dev/null | grep -q keychain-access-groups; then
+         printf 'keychain'; return
+       fi ;;
   esac
-  return 1
+
+  # 6. last resort: an encryption key exists but no session files were found to go with it
+  if security find-generic-password -s "$n Safe Storage" >/dev/null 2>&1; then printf 'enc-store'; return; fi
+  if [ "$base" != "$n" ] && security find-generic-password -s "$base Safe Storage" >/dev/null 2>&1; then
+    printf 'enc-store'; return
+  fi
+  printf 'none'
+}
+
+# Short human label for a session_evidence value — used by migrate-list and the menu-bar app.
+evidence_label() { # $1 = evidence
+  case "$1" in
+    account-file)  printf 'account file';;
+    tdata)         printf 'account store';;
+    cookies-enc)   printf 'cookies (encrypted)';;
+    cookies-plain) printf 'cookies (plaintext)';;
+    webstorage)    printf 'local web data';;
+    keychain)      printf 'Keychain login';;
+    enc-store)     printf 'no session files';;
+    *)             printf 'none';;
+  esac
 }
 
 generic_backup_spec() { # $1 = registry key OR app name/path
@@ -324,15 +435,21 @@ cmd_migratelist() {
   # Scanning every installed app costs seconds (codesign/security/sqlite per app), which made the
   # menu-bar app hang on every click. Serve --raw from a cache; refresh explicitly or when stale.
   local cache="$ROOT/migrate-cache"
-  if [ "$raw" = 1 ] && [ "$refresh" = 0 ] && [ -s "$cache" ]; then cat "$cache"; return 0; fi
+  # The cache is STAMPED with the format version. Field 3 used to be a hand-authored auth locus and now
+  # carries measured session evidence; without this stamp the menu-bar app kept serving the old values,
+  # which still parsed fine and quietly meant something else.
+  local cver="#multiapp-migrate-cache 2"
+  if [ "$raw" = 1 ] && [ "$refresh" = 0 ] && [ -s "$cache" ] \
+     && [ "$(head -1 "$cache")" = "$cver" ]; then tail -n +2 "$cache"; return 0; fi
   if [ "$raw" = 1 ]; then
     mkdir -p "$ROOT"
     local tmpf; tmpf="$(mktemp)"
-    if migratelist_scan --raw > "$tmpf" 2>/dev/null && [ -s "$tmpf" ]; then
+    printf '%s\n' "$cver" > "$tmpf"
+    if migratelist_scan --raw >> "$tmpf" 2>/dev/null && [ "$(wc -l < "$tmpf")" -gt 1 ]; then
       mv "$tmpf" "$cache" 2>/dev/null || cp "$tmpf" "$cache" 2>/dev/null || true
     fi
     rm -f "$tmpf" 2>/dev/null || true
-    cat "$cache" 2>/dev/null || true
+    tail -n +2 "$cache" 2>/dev/null || true
     return 0
   fi
   migratelist_scan
@@ -340,7 +457,7 @@ cmd_migratelist() {
 
 migratelist_scan() {
   local raw=0; [ "${1:-}" = "--raw" ] && raw=1
-  [ "$raw" = 1 ] || printf '%-20s %-14s %-11s %s\n' "APP" "VERDICT" "AUTH" "SAME-MAC BACKUP"
+  [ "$raw" = 1 ] || printf '%-20s %-14s %-20s %s\n' "APP" "VERDICT" "SESSION" "SAME-MAC BACKUP"
   # curated registry entries first (better cache excludes), then every OTHER installed app that has
   # local data — so an app installed later still shows up without needing a hand-written spec.
   # Dedupe by the resolved BUNDLE PATH: the same app otherwise appears twice, once under its registry
@@ -356,13 +473,20 @@ migratelist_scan() {
     a="$(printf '%s\n' "$spec" | awk '$1=="A"{print $2;exit}')"
     first="$(printf '%s\n' "$spec" | awk '$1=="D"{sub(/^D /,"");print;exit}')"
     [ -n "$first" ] && [ -e "$first" ] || continue    # only apps with data present on this machine
-    # …and only apps that actually hold a login — Sublime Text / Numbers / Xcode don't belong here
+    # …and only apps that actually hold a session — Sublime Text / Numbers / Xcode don't belong here.
+    # The SESSION column reports what was MEASURED on this machine, not the curated 'A' line: the
+    # hand-written value calls everything a login, which is how an app with no account at all
+    # (HDRezka-Client — website cookies in a webview, no sign-in screen) read as one.
     ap="$(resolve_app_path "$key" 2>/dev/null || true)"
-    { [ -n "$ap" ] && app_has_login "$ap"; } || continue
-    if [ "$raw" = 1 ]; then printf '%s|%s|%s\n' "$key" "$v" "$a"       # key|verdict|authlocus (for the GUI)
-    else printf '%-20s %-14s %-11s %s\n' "$key" "$v" "$a" "backup available"; fi
+    [ -n "$ap" ] || continue
+    local ev; ev="$(session_evidence "$ap")"
+    [ "$ev" != none ] || continue
+    if [ "$raw" = 1 ]; then printf '%s|%s|%s\n' "$key" "$v" "$ev"      # key|verdict|evidence (for the GUI)
+    else printf '%-20s %-14s %-20s %s\n' "$key" "$v" "$(evidence_label "$ev")" "backup available"; fi
   done
-  [ "$raw" = 1 ] || { info ""; info "same-machine restore is FULL (login included). moving to another Mac = content + re-login."; }
+  [ "$raw" = 1 ] || { info ""; info "SESSION = what was found on disk, not a guess about accounts. Run 'session-check <app>'"
+       info "to see WHICH sites the cookies belong to — that is what tells you if a login is involved."
+       info "same-machine restore is FULL (login included). moving to another Mac = content + re-login."; }
 }
 
 cmd_backup() {
@@ -546,6 +670,18 @@ session_paths() { # $1 = .app path → absolute paths of login-bearing data that
              "Default/Cookies" "Default/Local Storage" "Default/Session Storage" "Default/Network"; do
       if [ -e "$d/$p" ]; then printf '%s\n' "$d/$p"; fi
     done
+    # Chromium "partitions". Notion keeps its REAL session in Partitions/notion/Cookies (35 encrypted
+    # cookies, .identity.notion.com among them) while the top-level Cookies store sits EMPTY — so a
+    # session backup that skipped these archived nothing and restored no login at all.
+    if [ -d "$d/Partitions" ]; then
+      local part q
+      for part in "$d"/Partitions/*/; do
+        [ -d "$part" ] || continue
+        for q in "Cookies" "Cookies-journal" "Local Storage" "Session Storage" "IndexedDB" "Network"; do
+          if [ -e "$part$q" ]; then printf '%s\n' "$part$q"; fi
+        done
+      done
+    fi
     break
   done
   # Telegram Desktop (tdesktop) family: the login lives in tdata — its own encrypted key store, NOT
@@ -589,42 +725,10 @@ session_portability() { # $1 = .app path → keychain-only | same-mac-only | may
   local app="$1" bid n hit ck
   bid="$(plist_get "$app" CFBundleIdentifier)"
   n="$(plist_get "$app" CFBundleName)"; [ -n "$n" ] || n="$(basename "$app" .app)"
-  # find the cookie store from the paths we actually collected (handles Chromium profile dirs like
-  # Google/Chrome/Default/Cookies and Gecko's Profiles/*/cookies.sqlite, which fixed guesses missed)
-  ck=""
-  local sp
-  while IFS= read -r sp; do
-    [ -n "$sp" ] || continue
-    case "$sp" in
-      */Cookies|*/cookies.sqlite) [ -f "$sp" ] && { ck="$sp"; break; };;
-    esac
-    if [ -d "$sp" ]; then
-      local found; found="$(find "$sp" -maxdepth 3 \( -name Cookies -o -name cookies.sqlite \) -type f 2>/dev/null | head -1 || true)"
-      [ -n "$found" ] && { ck="$found"; break; }
-    fi
-  done < <(session_paths "$app" 2>/dev/null)
-  if [ -n "$ck" ] && [ -f "$ck" ]; then
-    # scan the WHOLE cookie table, not a sample: an empty store or a first page of unencrypted
-    # cookies says nothing (this produced two wrong verdicts before)
-    hit="$(/usr/bin/python3 -c "
-import sqlite3,shutil,tempfile,os
-t=tempfile.mktemp()
-try:
-    shutil.copy('$ck',t); c=sqlite3.connect(t)
-    try:      # Chromium: encrypted_value blob carries a v10/v11 prefix when OS-encrypted
-        r=[x[0] for x in c.execute('select encrypted_value from cookies').fetchall() if x[0]]
-        v='empty' if not r else ('enc' if any(b[:3] in (b'v10',b'v11') for b in r) else 'plain')
-    except sqlite3.OperationalError:   # Gecko: moz_cookies stores values in the clear
-        n=c.execute('select count(*) from moz_cookies').fetchone()[0]
-        v='plain' if n else 'empty'
-    c.close(); print(v)
-except Exception: print('unknown')
-finally:
-    try: os.unlink(t)
-    except Exception: pass" 2>/dev/null)"
-    [ "$hit" = enc ] && { printf 'same-mac-only'; return; }
-    [ "$hit" = plain ] && { printf 'maybe-portable'; return; }
-  fi
+  # strongest evidence across every cookie store the app owns, including partitioned ones
+  hit="$(app_cookie_kind "$app")"
+  [ "$hit" = enc ] && { printf 'same-mac-only'; return; }
+  [ "$hit" = plain ] && { printf 'maybe-portable'; return; }
   # No usable cookie evidence. A "Safe Storage" item alone does NOT mean the login is in these files —
   # Gemini has one yet stayed signed in after every session file was deleted (verified 2026-07-25).
   codesign -d --entitlements :- "$app" 2>/dev/null | grep -q "keychain-access-groups" && { printf 'keychain-only'; return; }
@@ -902,6 +1006,16 @@ cmd_session_check() {
                     info "       Only the destroy-and-restore test below settles it.";;
     none)           info "login: no session files at all — the login lives only in the Keychain";;
   esac
+  local hosts; hosts="$(cookie_hosts "$app" 2>/dev/null | sort | uniq -c | sort -rn || true)"
+  if [ -n "$hosts" ]; then
+    local total sites
+    total="$(printf '%s\n' "$hosts" | awk '{s+=$1} END{print s+0}')"
+    sites="$(printf '%s\n' "$hosts" | grep -c . || true)"
+    info ""
+    info "cookies: $total across $sites site(s) — whose they are is what tells you if a login is involved:"
+    printf '%s\n' "$hosts" | head -8 | while read -r cnt host; do info "  $(printf '%4s' "$cnt")  $host"; done
+    [ "$sites" -gt 8 ] && info "  … and $((sites - 8)) more"
+  fi
   info ""
   info "these verdicts are a heuristic. to KNOW: quit the app, session-backup, delete the files above,"
   info "launch (still signed in? then the files aren't the login), then session-restore and relaunch."
@@ -1448,10 +1562,11 @@ usage: multiapp <command> [args]
   import  <app> <prof|main> <f> merge a session archive (claude) / restore whole profile (others)
   app-export      <app> [dir]   export ANY app's local data (sessions/settings) to a folder
   app-import      <archive>     import an app-export archive back (merges; never deletes)
-  session-check   <app>         show an app's login/session files + whether they'd survive a Mac move
+  session-check   <app>         what session data an app holds, which SITES its cookies belong to,
+                                and whether any of it would survive a move to another Mac
   session-backup  <app> [out]   save ONLY the login session (any installed app; small + fast)
   session-restore <app> <file>  put a saved login back (same Mac)
-  migrate-list                  apps whose real data can be backed up on this machine
+  migrate-list                  apps holding a saved session on this machine, and what KIND it is
   backup  <app> [out] [--include-cache]   back up an app's REAL data (same-Mac restore = full, incl. login)
   restore <app> <archive>       restore a backup (quits nothing; stages current data to Trash first)
   delete  <app> <profile>       move a profile to Multiapp Trash (staged, recoverable)
