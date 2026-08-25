@@ -139,23 +139,26 @@ fn request_quit_windows(pids: &[u32]) {
     }
 }
 
+/// Two whole functions rather than one with a runtime branch: on Windows the `cfg!(windows)` version
+/// left a bare `return` as the final statement once the Unix arm was compiled out, and clippy's
+/// needless_return rejected it under -D warnings. Found by the first CI run on Windows — this file
+/// cannot be linted for Windows from a Mac.
+#[cfg(windows)]
 fn request_quit(pids: &[u32]) {
-    if cfg!(windows) {
-        request_quit_windows(pids);
-        return;
-    }
-    #[cfg(not(windows))]
-    {
-        let mut sys = System::new_with_specifics(
-            RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
-        );
-        sys.refresh_processes(ProcessesToUpdate::All, true);
-        for pid in pids {
-            if let Some(p) = sys.process(sysinfo::Pid::from_u32(*pid)) {
-                let r = p.kill_with(sysinfo::Signal::Term); // SIGTERM — Electron flushes its DBs
-                if std::env::var("MULTIAPP_DEBUG").is_ok() {
-                    eprintln!("[debug] SIGTERM pid {pid} -> {r:?}");
-                }
+    request_quit_windows(pids);
+}
+
+#[cfg(not(windows))]
+fn request_quit(pids: &[u32]) {
+    let mut sys = System::new_with_specifics(
+        RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
+    );
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+    for pid in pids {
+        if let Some(p) = sys.process(sysinfo::Pid::from_u32(*pid)) {
+            let r = p.kill_with(sysinfo::Signal::Term); // SIGTERM — Electron flushes its DBs
+            if std::env::var("MULTIAPP_DEBUG").is_ok() {
+                eprintln!("[debug] SIGTERM pid {pid} -> {r:?}");
             }
         }
     }
