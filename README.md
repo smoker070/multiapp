@@ -233,11 +233,17 @@ sibling profile is *not* reported as running, and asserts graceful stop works:
 | `ubuntu-latest` | Chrome, `/usr/bin/google-chrome`, headless | passes |
 | `macos-latest` | — | **skipped**, see below |
 
-The macOS job cannot run it. macOS launches through LaunchServices (`open -n`), which needs a window
-server, and GitHub's macOS runners have no Aqua session — `open` blocks there indefinitely rather
-than failing, which cost one CI run a ten-minute hang before it was diagnosed. The test now detects
-the missing session and skips with a reason. macOS is instead verified on a real desktop, where the
-same test runs against Chrome and passes.
+The macOS job cannot run it. macOS launches through LaunchServices (`open -n`), which needs a usable
+window server, and GitHub's macOS runners do not have one — `open` blocks there instead of failing,
+which cost one CI run a ten-minute hang before it was diagnosed. Detecting the condition was itself
+misleading: those runners report `launchctl managername` as **Aqua**, so the obvious check passed and
+the test failed anyway. The test now simply skips on macOS under CI and says why. Nothing is lost by
+that, because macOS is the one platform verified on a real desktop on every change; CI exists here to
+reach Windows and Linux, which the development machine cannot.
+
+That hang also produced a product fix: `launch()` no longer waits on `open` indefinitely. It gives up
+after 30 seconds and reports a stuck LaunchServices, which a user with a wedged window server would
+have wanted too.
 
 Two limits worth being blunt about. First, what CI verifies is the **Rust** CLI — the bash tool with
 its 27 commands is macOS-only in practice and has no automated suite. Second, `multiapp.ps1` is a

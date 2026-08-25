@@ -10,19 +10,20 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// A Chromium-family app we can drive. Edge on Windows, Chrome/anything on macOS/Linux.
-/// macOS routes launches through LaunchServices (`open -n`), which needs a window server. GitHub's
-/// macOS runners have no Aqua session, so `open` blocks there indefinitely — the first CI run hung
-/// for the full 10-minute step timeout rather than failing. Linux and Windows are unaffected: Linux
-/// runs Chrome headless and Windows spawns the executable directly.
-fn has_gui_session() -> bool {
-    if !cfg!(target_os = "macos") {
-        return true;
-    }
-    std::process::Command::new("launchctl")
-        .arg("managername")
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "Aqua")
-        .unwrap_or(false)
+/// Can this machine actually launch a GUI app?
+///
+/// macOS goes through LaunchServices (`open -n`), which needs a usable window server. GitHub's macOS
+/// runners do not have one, and `open` there blocks instead of failing — the first run hung for the
+/// full 10-minute step timeout.
+///
+/// Detecting it turned out to be harder than expected. `launchctl managername` reports **"Aqua"** on
+/// those runners, so that check passed and the test still failed; the session is nominally graphical
+/// and still cannot put a window on a screen. Rather than keep guessing at a signal, this skips on
+/// macOS under CI and says so. macOS is the one platform that IS verified on a real desktop on every
+/// change, so nothing is lost — CI exists here to cover Windows and Linux, which cannot be reached
+/// from the development machine at all.
+fn can_launch_gui() -> bool {
+    !(cfg!(target_os = "macos") && std::env::var("CI").is_ok())
 }
 
 fn find_app() -> Option<PathBuf> {
@@ -51,9 +52,9 @@ fn find_app() -> Option<PathBuf> {
 
 #[test]
 fn launch_isolates_then_stops_gracefully() {
-    if !has_gui_session() {
-        eprintln!("skipping: macOS with no Aqua session — `open -n` cannot launch a GUI app here.");
-        eprintln!("          Run this test on a real desktop session; it is not a code failure.");
+    if !can_launch_gui() {
+        eprintln!("skipping: macOS CI runner has no usable window server, so `open -n` cannot work.");
+        eprintln!("          This test runs for real on a macOS desktop; it is not a code failure.");
         return;
     }
     let Some(app) = find_app() else {
