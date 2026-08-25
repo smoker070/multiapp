@@ -78,11 +78,24 @@ pub fn launch(app: &Path, data_dir: &Path, extra: &[String]) -> Result<(), Error
 
     if cfg!(target_os = "macos") {
         // macOS alone needs `open -n`: Launch Services would otherwise just focus the running copy.
-        let st = Command::new("open")
+        // `open` normally returns immediately. It does NOT when there is no window server: CI hung
+        // here for ten minutes. Bound the wait so a stuck LaunchServices is reported, not endured.
+        let mut child = Command::new("open")
             .arg("-n").arg(app).arg("--args").arg(&flag).args(extra)
-            .status().map_err(Error::Io)?;
-        if !st.success() {
-            return Err(Error::LaunchFailed(format!("open exited with {st}")));
+            .spawn().map_err(Error::Io)?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            match child.try_wait().map_err(Error::Io)? {
+                Some(st) if st.success() => break,
+                Some(st) => return Err(Error::LaunchFailed(format!("open exited with {st}"))),
+                None if std::time::Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    return Err(Error::LaunchFailed(
+                        "`open` did not return within 30s — no window server?".into(),
+                    ));
+                }
+                None => std::thread::sleep(std::time::Duration::from_millis(100)),
+            }
         }
     } else {
         // Windows and Linux have no one-instance-per-app rule to defeat: running it again is enough.

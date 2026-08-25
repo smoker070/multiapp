@@ -10,6 +10,21 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// A Chromium-family app we can drive. Edge on Windows, Chrome/anything on macOS/Linux.
+/// macOS routes launches through LaunchServices (`open -n`), which needs a window server. GitHub's
+/// macOS runners have no Aqua session, so `open` blocks there indefinitely — the first CI run hung
+/// for the full 10-minute step timeout rather than failing. Linux and Windows are unaffected: Linux
+/// runs Chrome headless and Windows spawns the executable directly.
+fn has_gui_session() -> bool {
+    if !cfg!(target_os = "macos") {
+        return true;
+    }
+    std::process::Command::new("launchctl")
+        .arg("managername")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "Aqua")
+        .unwrap_or(false)
+}
+
 fn find_app() -> Option<PathBuf> {
     let candidates: Vec<PathBuf> = if cfg!(target_os = "windows") {
         ["ProgramFiles(x86)", "ProgramFiles"]
@@ -36,6 +51,11 @@ fn find_app() -> Option<PathBuf> {
 
 #[test]
 fn launch_isolates_then_stops_gracefully() {
+    if !has_gui_session() {
+        eprintln!("skipping: macOS with no Aqua session — `open -n` cannot launch a GUI app here.");
+        eprintln!("          Run this test on a real desktop session; it is not a code failure.");
+        return;
+    }
     let Some(app) = find_app() else {
         eprintln!("skipping: no Chromium-family app installed on this machine");
         return;

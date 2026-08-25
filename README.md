@@ -8,7 +8,8 @@
 <p align="center">
   <img alt="platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-informational">
   <img alt="macos" src="https://img.shields.io/badge/macOS-verified-success">
-  <img alt="windows" src="https://img.shields.io/badge/Windows-unproven-yellow">
+  <img alt="windows" src="https://img.shields.io/badge/Windows-CI%20verified-success">
+  <img alt="linux" src="https://img.shields.io/badge/Linux-CI%20verified-success">
   <img alt="rust" src="https://img.shields.io/badge/Rust-2021-b7410e">
   <img alt="tests" src="https://img.shields.io/badge/rust%20tests-9%20passing-success">
   <img alt="licence" src="https://img.shields.io/badge/licence-MIT-blue">
@@ -216,22 +217,32 @@ hardware**.
 | App backup and restore | Complete |
 | Login-session save and restore | Complete |
 | Export / import of any app's local data | Complete |
-| Rust portable core and CLI | `new · launch · list · stop · where` complete |
+| Rust portable core and CLI | `new · launch · list · stop · where` complete — **verified by CI on Windows and Linux** |
 | Windows (`multiapp.ps1`) | Profile commands only, **never executed on Windows** |
-| Linux | Implemented from verified patterns, **never executed on Linux** |
-| Cross-platform CI | Authored, never run — see below |
+| Linux (`multiapp` bash) | Implemented from verified patterns, **never executed on Linux** |
+| Cross-platform CI | Green on Windows and Linux; skips the GUI test on macOS runners — see below |
 | Tauri GUI | Not started |
 
-**Known limitation, stated deliberately:** everything in this repository has been compiled and run
-on one machine, by one person, on macOS. The CI workflow at
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) exists and does more than compile — it
-launches a real Chromium app on each runner, asserts it wrote into the isolated profile, asserts a
-prefix-named sibling profile is *not* reported as running, and asserts graceful stop works — but it
-has never executed, because until now there was no remote to run it on.
+**What is actually verified, and by what.** The Rust CLI is exercised on every push by a CI job that
+launches a real Chromium app, asserts it wrote into the isolated profile, asserts a prefix-named
+sibling profile is *not* reported as running, and asserts graceful stop works:
 
-The Windows graceful-stop assertion is the one most likely to fail first: `taskkill` without `/F`
-sends `WM_CLOSE`, which a process with no top-level window never receives. If it fails, that is the
-finding, and the fix is an explicit escalation policy rather than a silent force-kill.
+| Runner | App driven | Result |
+|---|---|---|
+| `windows-latest` | Edge, `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe` | passes — including graceful stop via `taskkill` without `/F` |
+| `ubuntu-latest` | Chrome, `/usr/bin/google-chrome`, headless | passes |
+| `macos-latest` | — | **skipped**, see below |
+
+The macOS job cannot run it. macOS launches through LaunchServices (`open -n`), which needs a window
+server, and GitHub's macOS runners have no Aqua session — `open` blocks there indefinitely rather
+than failing, which cost one CI run a ten-minute hang before it was diagnosed. The test now detects
+the missing session and skips with a reason. macOS is instead verified on a real desktop, where the
+same test runs against Chrome and passes.
+
+Two limits worth being blunt about. First, what CI verifies is the **Rust** CLI — the bash tool with
+its 27 commands is macOS-only in practice and has no automated suite. Second, `multiapp.ps1` is a
+separate implementation that still has never been executed on Windows; `scripts/test-windows.ps1`
+exists to change that, and [`WINDOWS.md`](WINDOWS.md) lists what is unproven.
 
 ---
 
