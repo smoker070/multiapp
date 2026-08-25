@@ -126,17 +126,24 @@ pub fn quit_and_wait(data_dir: &Path, timeout: std::time::Duration) -> Result<bo
 }
 
 /// Politely ask these processes to exit. Never force-kills: unsaved work belongs to the user.
-fn request_quit(pids: &[u32]) {
-    #[cfg(windows)]
+/// Windows' graceful close: `taskkill` WITHOUT /F, i.e. the polite half of Task Manager's "End task".
+/// Compiled on every platform deliberately — see resolve_app_windows for why.
+/// Note that many Electron apps treat the resulting WM_CLOSE as "minimise to tray", so the process may
+/// legitimately survive; the caller reports that rather than escalating to a force kill.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn request_quit_windows(pids: &[u32]) {
     for pid in pids {
-        // no /F — this is the graceful half of what Task Manager's "End task" does. Note that many
-        // Electron apps treat the resulting WM_CLOSE as "minimise to tray", so the process may
-        // legitimately survive; the caller reports that rather than escalating.
         let _ = std::process::Command::new("taskkill")
             .args(["/PID", &pid.to_string()])
             .output();
     }
+}
 
+fn request_quit(pids: &[u32]) {
+    if cfg!(windows) {
+        request_quit_windows(pids);
+        return;
+    }
     #[cfg(not(windows))]
     {
         let mut sys = System::new_with_specifics(

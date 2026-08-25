@@ -1,135 +1,354 @@
-# multiapp — prototype CLI (v0.3.0)
+<h1 align="center">Multiapp</h1>
 
-Run multiple isolated profiles of installed apps. Implements the mechanism verified in Phase 0
-(`../experiments/`): launch the app with `--user-data-dir=<profile>` (**equals form**) — no binary
-modification, no env overrides, credential store never touched. The lever is Electron/Chromium, so it
-is the same on every OS; only the plumbing (launch command, paths, shortcuts) differs per platform.
+<p align="center">
+  <b>Run several independent profiles of the same desktop app — separate logins, cookies and
+  settings — without modifying, copying or re-signing the app.</b>
+</p>
 
-## Files
+<p align="center">
+  <img alt="platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-informational">
+  <img alt="macos" src="https://img.shields.io/badge/macOS-verified-success">
+  <img alt="windows" src="https://img.shields.io/badge/Windows-unproven-yellow">
+  <img alt="rust" src="https://img.shields.io/badge/Rust-2021-b7410e">
+  <img alt="tests" src="https://img.shields.io/badge/rust%20tests-9%20passing-success">
+  <img alt="licence" src="https://img.shields.io/badge/licence-MIT-blue">
+</p>
 
-| File | Platform | Status |
-|---|---|---|
-| `multiapp` (bash) | **macOS** + **Linux** | macOS fully tested; Linux implemented per multigravity's verified patterns, **pending a real Linux test** |
-| `multiapp.ps1` (PowerShell) | **Windows** | **profile commands only** (~half the CLI) and **never run on real Windows**. Read [WINDOWS.md](WINDOWS.md) first — it lists the known defects. The backup/session/export commands do not exist there yet |
-| `rust/` (Rust workspace) | **macOS + Windows + Linux** | **profile commands only** (`new · launch · list · stop · where`) — the portable rewrite. Unlike the bash and PowerShell scripts, this one is **tested on real Windows and Linux by CI**, which launches Edge/Chrome into an isolated profile and stops it again. Builds `multiapp.exe`. Shares the same profile storage as the bash CLI |
-| `app/Multiapp.swift` + `app/build.sh` | **macOS menu-bar app** (v0.3.0) | built with plain `swiftc` (no Xcode), ad-hoc signed; installs to `~/Applications/Multiapp.app`, DMG in `app/dist/`. Thin GUI over the CLI: profile list with running state, launch/stop, rename/clone/export/delete, New Profile dialog, **Back Up & Restore** submenu, **Export/Import App Data**, Claude session transfer, rescan. Reads `list --raw` / `migrate-list --raw` (cached) so the menu opens instantly |
+<p align="center">
+  <i>One flag does all the work: <code>--user-data-dir=&lt;dir&gt;</code>.
+  No binary patching, no re-signing, and the credential store is never touched.</i>
+</p>
 
-## Move-proof install (the `multiapp` command)
+---
 
-Run once:
-```bash
-"<path>/prototype/multiapp" install-stub
+<p align="center">
+  <img src="app/assets/icon_1024.png" alt="Multiapp" width="128">
+</p>
+
+```console
+$ multiapp new "Google Chrome" work
+created Google Chrome/work
+  ~/Library/Application Support/Multiapp/Profiles/Google Chrome/work
+launch it:  multiapp launch "Google Chrome" "work"
+
+$ multiapp launch "Google Chrome" work
+launched Google Chrome/work
+
+$ multiapp list
+APP                PROFILE                STATE
+Google Chrome      personal               stopped
+Google Chrome      work                   running
+
+$ multiapp stop "Google Chrome" work
+Google Chrome/work stopped
+
+$ multiapp list
+APP                PROFILE                STATE
+Google Chrome      personal               stopped
+Google Chrome      work                   stopped
 ```
-This writes a tiny **self-locating stub** to `~/.local/bin/multiapp` (on PATH). The stub reads the real
-script's path from `~/.config/multiapp/target`; the real script rewrites that path on every run, and if
-the folder ever moves the stub self-heals instantly via the OS file index (`mdfind` on macOS,
-`locate/plocate` on Linux — **not** a recursive `find`, which hangs for minutes on big cloud drives).
 
-So: **moving or renaming the `Multiapp` folder no longer breaks anything.** Worst case, if the index is
-cold, run `install-stub` once from the new location.
+<p align="center">
+  <sub>Not a mock-up — real output from <code>multiapp</code> against a real Chrome install. The
+  author's own everyday Chrome was running throughout and was still running afterwards: profiles are
+  matched on the whole <code>--user-data-dir</code> value, so stopping one never reaches another
+  instance.</sub>
+</p>
 
-## Quick start
+---
 
-```bash
-multiapp apps                      # what's supported here (honest verdicts)
-multiapp new claude work           # create a profile
-multiapp launch claude work        # run it (isolated login/session/settings)
-multiapp wrapper claude work       # clickable launcher (macOS .app / Linux .desktop)
-multiapp list                      # profiles + running state + size
-multiapp stop claude work          # graceful quit
-```
+## Contents
 
-Example: a profile named `second` holding a second Claude account —
-`multiapp launch claude second`, or click `~/Applications/Multiapp/Claude – second.app`.
+- [What Multiapp is](#what-multiapp-is)
+- [What Multiapp is not](#what-multiapp-is-not)
+- [Features](#features)
+- [How it works](#how-it-works)
+- [Compatibility](#compatibility)
+- [Project status](#project-status)
+- [Installing](#installing)
+- [Building from source](#building-from-source)
+- [Repository layout](#repository-layout)
+- [Testing](#testing)
+- [Documentation](#documentation)
+- [Roadmap](#roadmap)
+- [Licence](#licence)
 
-## Commands
+---
 
-**Profiles:** `apps · scan · probe · new · launch · list · stop · clone · rename · delete · trash ·
-wrapper · install-stub · doctor · help`  (aliases: `ls`=list, `mv`=rename, `rm`=delete)
+## What Multiapp is
 
-**App data & logins:** `migrate-list · backup · restore · app-export · app-import ·
-session-check · session-backup · session-restore · list-installed`
+Multiapp gives one installed application several independent identities. A second Claude account,
+a work Notion beside a personal one, three Chrome profiles that are genuinely three browsers —
+each with its own login, cookies, local storage and settings, all from the single copy of the app
+already on your machine.
 
-**Claude Code sessions:** `sessions · transfer · export · import`
+It also backs up and restores an app's real local data, and — separately, and much smaller — just
+the **login session**, so that reinstalling an app does not mean signing in to everything again.
 
-Everything outside the profile group is macOS/Linux today — see the platform table above.
+Three properties shape every decision in it:
 
-| Command | Notes |
+**The app is never modified.** No binary patching, no re-signing, no injected libraries, no copied
+bundles. Multiapp launches the app you already have with one extra command-line flag. That is the
+whole mechanism, and it is why an app update never breaks a profile.
+
+**Credential stores are never touched.** Multiapp does not read, write, export or decrypt anything
+in the macOS Keychain or Windows Credential Manager. This is a deliberate limit with a visible
+consequence — logins do not travel to another machine — and the tool says so rather than pretending
+otherwise.
+
+**A verdict has to be earned.** Every app in the compatibility table below was tested, and the ones
+that do not work say why. Gemini is listed as unsupported because deleting every one of its session
+files left it still signed in; that is a measurement, not an assumption.
+
+## What Multiapp is not
+
+It is **not a sandbox and not a security boundary.** Profiles run as the same user, with the same
+Keychain and the same TCC permission grants. They isolate *sessions*, not *privileges*. A profile
+will not stop a malicious app from reading another profile's files.
+
+It is **not a way around licensing, subscription seat limits, account limits, authentication, app
+integrity checks or terms of service.** Nothing here defeats a protection; it passes a documented
+Chromium flag to an unmodified binary. Whether running two accounts is permitted is a question for
+the service's terms, not for this tool.
+
+It does **not work for every app** — see [Compatibility](#compatibility). Sandboxed apps, native
+apps with no web layer, and apps that override their own data directory in code cannot be profiled
+by any flag, and Multiapp reports those as unsupported rather than failing quietly.
+
+---
+
+## Features
+
+### Working today
+
+| | |
 |---|---|
-| `scan` | discover new Electron/Chromium apps → `registry.local` as *untested* (macOS: `/Applications`; Linux: `.desktop` files; Windows: Programs dirs). Natives/sandboxed skipped |
-| `probe <app>` | 10-second canary: does the app honor the flag? Persists verdict for scanned apps |
-| `clone / rename / delete` | stopped profiles only; delete is type-name-confirmed → staged `Trash/` (recoverable) |
-| `wrapper` | macOS: `osacompile` applet with the app's icon; Linux: `.desktop`; Windows: Start-Menu `.lnk` |
-| `transfer claude <src> <dst> [sel]` | copy chosen Claude Code sessions between profiles on one machine — a **true copy**: new session ids + duplicated transcript, so the two profiles never share a live session (transcripts live in `~/.claude`, which `--user-data-dir` does not isolate) |
-| `export/import claude` | bundle chosen sessions (index + transcripts) to move to another machine |
-| `app-export <app> [dir]` / `app-import <archive>` | export/import **any** installed app's local data (work sessions, settings) — not just profile-capable ones. Looks in `~/Library` **and** home dotfolders (`~/.codex`, `~/.claude`) where CLI-style apps actually keep sessions. Import **merges**: it never deletes files the archive omitted |
-| `session-check / session-backup / session-restore <app>` | save and put back just the **login session** (KB-sized). `session-check` says whether that login could survive a move to another Mac |
-| `migrate-list` | apps whose **real** local data can be backed up on this machine, with a verdict per app |
-| `backup <app> [out] [--include-cache]` | archive an app's real data (quit the app first). Caches excluded by default. **On the same Mac a restore is full — login included** — because the login lives in the Keychain, which stays on this machine |
-| `restore <app> <archive>` | restore a backup: validates the archive, moves current data to `Trash/` first (recoverable), then extracts |
-| `install-stub` | (re)install the move-proof launcher on PATH |
+| **Profiles** | Create, launch, list, stop, clone, rename and delete isolated profiles of an installed app |
+| **Discovery** | `scan` finds Electron/Chromium apps automatically, so apps installed later appear without a code change; natives and sandboxed apps are skipped with a reason |
+| **Probing** | `probe` is a 10-second canary that launches an app and checks whether the flag was actually honoured, then records the verdict |
+| **Launchers** | Clickable per-profile launchers — a macOS `.app` applet carrying the real app's icon, a Linux `.desktop` entry, a Windows Start-Menu shortcut |
+| **Menu-bar app** | macOS AppKit status-bar UI over the CLI: profile list with live running state, launch/stop, rename/clone/delete, backup and restore, export/import, session transfer |
+| **App backup** | Archive an app's real local data and restore it. Restores **merge** rather than replace, and anything they displace is staged to a recoverable Trash first |
+| **Login sessions** | Save and restore just the login — kilobytes, not gigabytes — for any installed app, including ones that cannot be profiled at all |
+| **Session reporting** | `session-check` shows what session data an app holds, which **sites** its cookies belong to, and whether any of it would survive a move to another Mac |
+| **Claude Code sessions** | Copy chosen sessions between profiles as a true copy — new session ids and a duplicated transcript — because transcripts live outside the profile and sharing one is a live-session collision |
+| **Portable core** | A Rust `multiapp-core` + `multiapp-cli` with `new · launch · list · stop · where`, one codebase for all three platforms |
+| **Safety** | Type-to-confirm deletes, staged Trash instead of `rm`, a containment guard that refuses any path outside Multiapp's own root, and graceful quit that never force-kills |
 
-### Backup / restore — what actually moves
+### Designed and scheduled
 
-**Local content** (history, drafts, settings) is plain files → copies perfectly.
+A Tauri desktop GUI on the Rust core · the remaining commands ported to Rust · signed and notarised
+macOS builds · a Windows installer · backup and session support on Windows.
 
-**Login** is different, and the detail matters:
+See [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
-| App type | What the archive holds | Verified |
-|---|---|---|
-| Electron/Chromium (Claude, Notion, ChatGPT, Chrome, VS Code) | the session files (`Cookies`, `Local State`, `Local Storage`, `IndexedDB`) — but the cookies are **encrypted** (`v10` prefix) with a key that lives in the **Keychain**, which is *not* in the archive | ✅ inspected |
-| Native, Keychain-token (ChatGPT Classic, Gemini, **Telegram for macOS**) | **no usable session files** — the token lives only in the Keychain. Verified by experiment: deleting every session file left Gemini still signed in | ✅ verified |
-| **Telegram Desktop** (`com.tdesktop.Telegram`) | different from Telegram for macOS: its login lives in `tdata`, **its own encrypted key store, not the Keychain** — so this one is the best cross-machine candidate | ✅ inspected |
+---
 
-Either way the login is only usable where its **Keychain** is:
-
-- **Restore on this Mac with the Keychain intact** (e.g. you reinstalled *the app*) → history **and**
-  login work — not because the archive carries the login, but because the Keychain never left.
-- **Fresh macOS install, another Mac, or another user** → the Keychain is gone, so encrypted cookies
-  can't be decrypted and tokens are absent → history and settings restore, **you sign in once**.
-
-⚠️ "Same machine" is not the same as "same Keychain". Erasing the Mac and reinstalling macOS wipes the
-login keychain too, so that case behaves like a new machine unless you also restore the Keychain
-(Migration Assistant / Time Machine do that; Multiapp deliberately never touches Keychain items).
-
-`migrate-list` only lists apps that hold a **saved session** (so Sublime Text, Numbers and Xcode are
-filtered out), and its `SESSION` column says what kind was found — `cookies (encrypted)`,
-`cookies (plaintext)`, `account file`, `login lives in the Keychain`. It reports what is on disk and
-does **not** guess whether you have an account there: telling an account apart from ordinary website
-state needs the cookie *values*, which Multiapp never reads. `session-check <app>` shows which **sites**
-the cookies belong to, which is what actually answers the question — `.claude.ai` and
-`app.notion.com` are a login; twelve HDRezka mirror domains plus ad trackers are not.
-
-Multiapp never touches Keychain or Credential Manager items — that is precisely why logins don't
-migrate to another machine.
-
-## Storage (per platform)
+## How it works
 
 ```
-macOS:   ~/Library/Application Support/Multiapp/Profiles/<app>/<profile>/data/
-Linux:   ${XDG_DATA_HOME:-~/.local/share}/multiapp/Profiles/<app>/<profile>/data/
-Windows: %APPDATA%\Multiapp\Profiles\<app>\<profile>\data\
-         + registry.local (scanned apps) · Trash/ (staged deletes) · Probes/ (canary)
-wrappers: ~/Applications/Multiapp (mac) · ~/.local/share/applications (linux) · Start Menu (win)
-stub cfg: ~/.config/multiapp/target
+┌──────────────────────────────────────────────────────────────┐
+│  app/Multiapp.swift    macOS menu-bar UI (AppKit)             │
+│                        a thin shell over the CLI              │
+└───────────────────────────────┬──────────────────────────────┘
+                                │ never touches profiles directly
+┌───────────────────────────────▼──────────────────────────────┐
+│  multiapp  (bash)      27 commands — profiles, backup,        │
+│  multiapp.ps1          sessions, export/import, discovery     │
+│  rust/  (portable)     new · launch · list · stop · where     │
+└───────────────┬──────────────────────────────┬───────────────┘
+┌───────────────▼──────────────┐ ┌─────────────▼───────────────┐
+│  the launch lever            │ │  the data layer              │
+│  --user-data-dir=<profile>   │ │  per-profile directories,    │
+│  + `open -n` on macOS only   │ │  staged Trash, containment   │
+└──────────────────────────────┘ └──────────────────────────────┘
+                 │
+┌────────────────▼─────────────────────────────────────────────┐
+│  the unmodified application — launched, never altered         │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-## Known limitations (prototype)
+A few consequences worth stating plainly:
 
-- Profiles are convenience isolation, not a security boundary (same user, same Keychain/TCC).
-- ChatGPT: data isolates but identity is shared → one account everywhere (E4).
-- Claude downloads its ~11 GB Cowork `vm_bundles` **per profile**; safe to delete inside a profile if
-  unused (Claude re-downloads on demand).
-- **Linux & Windows are unproven on real hardware** — run `multiapp probe <app>` there first; treat
-  every non-macOS verdict as provisional.
-- Session transfer/export is Claude-Code-specific and macOS/Linux-only for now (needs Python 3).
+- **The equals form is mandatory.** `--user-data-dir=/path` works; `--user-data-dir /path` is
+  silently ignored by Chromium's switch parser. That distinction cost a day to find and is now the
+  single most important line in the codebase.
+- **`open -n` is a macOS-only workaround.** Launch Services would otherwise focus the running copy
+  instead of starting a second one. Windows and Linux have no such rule — running the binary again
+  is enough.
+- **`HOME` overrides do not work.** An early design assumed you could relocate an app by moving its
+  home directory. Experiment E1b disproved it: on modern macOS the Cocoa and Chromium layers ignore
+  `$HOME` entirely, and only POSIX and Node code paths follow it.
+- **Profile matching is on the exact flag value.** A profile named `work` is a prefix of `work2`,
+  and a substring match reports a stopped profile as running. Both the bash and Rust
+  implementations compare the whole value, and there is a regression test pinning it.
+- **Restores merge, never replace.** A cache-excluding archive is an *incomplete* copy of the
+  directories it covers, and replacing with it deletes everything it skipped. This was found the
+  hard way: a Telegram restore took 18,918 files down to 521.
 
-## Fixed-the-hard-way notes
+---
 
-- `--user-data-dir` MUST use `=`; the space form is silently ignored by Chromium parsing.
-- macOS bash 3.2: empty arrays + `set -u` need the `${arr[@]+"${arr[@]}"}` idiom.
-- Launch Services silently ignores `.app` bundles whose executable is a plain shell script → wrappers
-  must be Mach-O (`osacompile` applets).
-- `install-stub` must `rm -f` the target before writing, or `cat >` follows an existing symlink and
-  overwrites the real script (hit this once — now guarded).
-- Self-heal must use the OS file index, never a recursive `find` (minutes-long hang on cloud drives).
+## Compatibility
+
+Verified on macOS. Every verdict below came from actually running the app.
+
+| Status | Apps |
+|---|---|
+| **Supported** | Claude · Notion · Notion Calendar · GitHub Desktop · Visual Studio Code · Antigravity · Antigravity IDE · OpenMTP · Google Chrome |
+| **Partial** | ChatGPT — data isolates, but the *account* is shared across profiles because the identity lives in the Keychain. Do not sign out inside a profile. |
+| **Unsupported** | Gemini and ChatGPT Classic (native, no isolation lever) · Telegram for macOS (sandboxed — its container is keyed to the bundle id and cannot be redirected) · Telegram Desktop (not Electron) · HDRezka-Client (overrides its own `userData` path in code, so the flag is ignored) |
+| **Untested** | anything `scan` discovers — run `multiapp probe <app>` and it records the result |
+
+Backup and login-session commands work for **any** installed app that holds a session, including
+every app in the unsupported row.
+
+---
+
+## Project status
+
+Working and in daily use on macOS. Windows and Linux are implemented but **unproven on real
+hardware**.
+
+| Area | State |
+|---|---|
+| Profiles, discovery, probing, launchers (macOS) | Complete |
+| macOS menu-bar app and signed DMG | Complete (ad-hoc signed) |
+| App backup and restore | Complete |
+| Login-session save and restore | Complete |
+| Export / import of any app's local data | Complete |
+| Rust portable core and CLI | `new · launch · list · stop · where` complete |
+| Windows (`multiapp.ps1`) | Profile commands only, **never executed on Windows** |
+| Linux | Implemented from verified patterns, **never executed on Linux** |
+| Cross-platform CI | Authored, never run — see below |
+| Tauri GUI | Not started |
+
+**Known limitation, stated deliberately:** everything in this repository has been compiled and run
+on one machine, by one person, on macOS. The CI workflow at
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) exists and does more than compile — it
+launches a real Chromium app on each runner, asserts it wrote into the isolated profile, asserts a
+prefix-named sibling profile is *not* reported as running, and asserts graceful stop works — but it
+has never executed, because until now there was no remote to run it on.
+
+The Windows graceful-stop assertion is the one most likely to fail first: `taskkill` without `/F`
+sends `WM_CLOSE`, which a process with no top-level window never receives. If it fails, that is the
+finding, and the fix is an explicit escalation policy rather than a silent force-kill.
+
+---
+
+## Installing
+
+**macOS.** Download the DMG from [Releases](../../releases), drag Multiapp to Applications, then
+right-click → **Open** → **Open** on first launch (the build is ad-hoc signed, so Gatekeeper warns
+once). For the CLI:
+
+```bash
+./multiapp install-stub
+```
+
+That puts a small self-locating stub on your `PATH`. The stub records where the real script lives
+and re-finds it through the OS file index if the folder is ever moved, so moving or renaming the
+project directory does not break the command.
+
+**Windows.** No build step and no installer — `multiapp.ps1` runs on the PowerShell already in
+Windows. Read [`WINDOWS.md`](WINDOWS.md) first; it lists what is
+implemented and what has never been exercised.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\multiapp.ps1 doctor
+```
+
+---
+
+## Building from source
+
+Only the Rust core and the macOS app have a build step.
+
+```bash
+cd rust && cargo build --release
+```
+
+```bash
+bash app/build.sh
+```
+
+The first produces `multiapp` (or `multiapp.exe`); the second builds the macOS menu-bar app with
+plain `swiftc` — no Xcode project — installs it to `~/Applications`, and lays out a DMG.
+
+---
+
+## Repository layout
+
+```
+multiapp                 the macOS/Linux CLI — 27 commands, one bash file
+multiapp.ps1             the Windows CLI — profile commands only, unproven
+app/Multiapp.swift       macOS menu-bar application (AppKit)
+app/build.sh             swiftc build + DMG layout, no Xcode required
+app/make-assets.swift    icon and DMG background, drawn with CoreGraphics
+rust/crates/multiapp-core   paths, process matching, launching, profiles
+rust/crates/multiapp-cli    the portable command-line front end
+docs/                    research report, roadmap, experiment results
+scripts/test-windows.ps1 one-command Windows verification run
+.github/workflows/ci.yml build + real-app integration tests on all three OSes
+```
+
+## Testing
+
+```bash
+cd rust && cargo test
+```
+
+Nine tests: eight unit tests covering the prefix-collision guard, name validation, the containment
+guard, the environment override and the on-disk layout — plus one integration test that drives a
+**real Chromium app**. That test launches it into a throwaway profile, waits for the app to write
+there, confirms the process is found by profile, confirms a prefix-named sibling is not, and stops
+it gracefully. It skips rather than fails where no such app is installed.
+
+The bash CLI has no automated suite; its verdicts come from the experiment logs in
+[`docs/experiments/`](docs/experiments/), which record what was actually run and observed.
+
+## Documentation
+
+`docs/` is the evidence base, not a summary written afterwards.
+
+| File | What it holds |
+|---|---|
+| [`REPORT.md`](docs/REPORT.md) | The full technical design report — mechanisms, alternatives, compatibility analysis, risk register, and every conclusion labelled as verified, inferred, or unknown |
+| [`MULTIGRAVITY-ANALYSIS.md`](docs/MULTIGRAVITY-ANALYSIS.md) | Source-level analysis of the reference project this work started from, read from its actual files rather than its README |
+| [`ROADMAP.md`](docs/ROADMAP.md) | Milestones and their sequence |
+| [`BACKUP-MIGRATE-SPEC.md`](docs/BACKUP-MIGRATE-SPEC.md) | What can and cannot be migrated between machines, and why |
+| [`../WINDOWS.md`](WINDOWS.md) | Honest state of the Windows port |
+| [`experiments/`](docs/experiments/) | E1–E12 — the raw results, including the ones that disproved the original design |
+
+The experiments are the file to read first. They record what was measured, including the cases
+where a measurement contradicted the assumption and the design had to change — the `HOME` override
+that turned out to do nothing, and the session files whose deletion left an app still signed in.
+
+## Roadmap
+
+| Milestone | State |
+|---|---|
+| Verified isolation mechanism and macOS CLI | Complete |
+| macOS menu-bar app and DMG | Complete |
+| Backup, restore and login sessions | Complete |
+| Portable Rust core and CLI | Complete |
+| **CI green on Windows and Linux** | **Next** |
+| Remaining commands ported to Rust | Planned |
+| Tauri GUI on the shared core | Planned |
+| Signed and notarised macOS build, Windows installer | Planned |
+
+---
+
+## Licence
+
+**MIT** — see [`LICENSE`](LICENSE). Use it, fork it, ship it.
+
+Multiapp is an independent project. It is not affiliated with or endorsed by any of the
+applications it launches, and their names are used only to describe compatibility. It contains no
+code taken from them, modifies none of them, and circumvents no protection in any of them: it
+passes a documented Chromium command-line flag to a binary it leaves untouched.
+
+Backup archives produced by this tool can contain live session data. **Treat them like passwords.**
+
+---
+
+<p align="center"><sub>Built in Tashkent, Uzbekistan</sub></p>

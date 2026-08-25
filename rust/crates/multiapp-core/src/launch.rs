@@ -20,39 +20,71 @@ pub fn resolve_app(reference: &str) -> Result<std::path::PathBuf, Error> {
             return Ok(cand);
         }
     }
-    #[cfg(target_os = "windows")]
-    {
-        for var in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
-            if let Ok(base) = std::env::var(var) {
-                for sub in ["", "Programs"] {
-                    let cand = Path::new(&base).join(sub).join(reference)
-                        .join(format!("{reference}.exe"));
-                    if cand.exists() {
-                        return Ok(cand);
-                    }
+    if cfg!(target_os = "windows") {
+        if let Some(p) = resolve_app_windows(reference) {
+            return Ok(p);
+        }
+    }
+    Err(Error::AppNotFound(reference.to_string()))
+}
+
+/// Windows install layouts, in the order they actually occur. Compiled on EVERY platform on purpose:
+/// gating it with `#[cfg]` meant a typo here could only be discovered on a Windows machine, which is
+/// the one machine this project could not reach.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn resolve_app_windows(reference: &str) -> Option<std::path::PathBuf> {
+    let bases: Vec<std::path::PathBuf> = ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
+        .iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .map(std::path::PathBuf::from)
+        .collect();
+
+    // Chromium browsers hide the executable under Application\ and never match the name pattern
+    // below — "Chrome" lives at Google\Chrome\Application\chrome.exe, not Chrome\Chrome.exe.
+    const KNOWN: &[(&str, &str)] = &[
+        ("edge", r"Microsoft\Edge\Application\msedge.exe"),
+        ("msedge", r"Microsoft\Edge\Application\msedge.exe"),
+        ("microsoft edge", r"Microsoft\Edge\Application\msedge.exe"),
+        ("chrome", r"Google\Chrome\Application\chrome.exe"),
+        ("google chrome", r"Google\Chrome\Application\chrome.exe"),
+        ("brave", r"BraveSoftware\Brave-Browser\Application\brave.exe"),
+    ];
+    let lower = reference.to_lowercase();
+    for (key, rel) in KNOWN {
+        if lower == *key {
+            for b in &bases {
+                let cand = b.join(rel);
+                if cand.exists() {
+                    return Some(cand);
                 }
             }
         }
     }
-    Err(Error::AppNotFound(reference.to_string()))
+    // electron-builder per-user (%LOCALAPPDATA%\Programs\Notion\Notion.exe) and per-machine installs
+    for b in &bases {
+        for sub in ["", "Programs"] {
+            let cand = b.join(sub).join(reference).join(format!("{reference}.exe"));
+            if cand.exists() {
+                return Some(cand);
+            }
+        }
+    }
+    None
 }
 
 pub fn launch(app: &Path, data_dir: &Path, extra: &[String]) -> Result<(), Error> {
     std::fs::create_dir_all(data_dir).map_err(Error::Io)?;
     let flag = format!("--user-data-dir={}", data_dir.display()); // equals form, always
 
-    #[cfg(target_os = "macos")]
-    {
+    if cfg!(target_os = "macos") {
         // macOS alone needs `open -n`: Launch Services would otherwise just focus the running copy.
-        let mut c = Command::new("open");
-        c.arg("-n").arg(app).arg("--args").arg(&flag).args(extra);
-        let st = c.status().map_err(Error::Io)?;
+        let st = Command::new("open")
+            .arg("-n").arg(app).arg("--args").arg(&flag).args(extra)
+            .status().map_err(Error::Io)?;
         if !st.success() {
             return Err(Error::LaunchFailed(format!("open exited with {st}")));
         }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
+    } else {
         // Windows and Linux have no one-instance-per-app rule to defeat: running it again is enough.
         Command::new(app).arg(&flag).args(extra).spawn().map_err(Error::Io)?;
     }
