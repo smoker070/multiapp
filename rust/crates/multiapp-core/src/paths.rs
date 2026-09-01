@@ -7,6 +7,12 @@ use std::path::PathBuf;
 /// Windows uses **LocalAppData**, not Roaming: profiles are gigabytes (Claude alone downloads ~11 GB
 /// of Cowork bundles per profile), and Roaming is synced by enterprise roaming-profile policy — that
 /// combination is how you fill a fileserver and make logins take ten minutes.
+///
+/// NOTE for Windows: the NSIS installer also installs into `%LOCALAPPDATA%\Multiapp`, so the program
+/// and the profiles share a directory. That was tested rather than assumed — a canary file inside
+/// Profiles/ survived a silent uninstall, because Tauri's uninstaller removes the files it installed
+/// instead of the tree. It stays safe only while that remains true, so if the installer ever gains a
+/// "remove all data" step, the profiles root must move out from under it first.
 pub fn root() -> Result<PathBuf, Error> {
     if let Ok(over) = std::env::var("MULTIAPP_HOME") {
         if !over.is_empty() {

@@ -286,7 +286,18 @@ That puts a small self-locating stub on your `PATH`. The stub records where the 
 and re-finds it through the OS file index if the folder is ever moved, so moving or renaming the
 project directory does not break the command.
 
-**Windows.** No build step and no installer — `multiapp.ps1` runs on the PowerShell already in
+**Windows.** Download `Multiapp_0.3.0_x64-setup.exe` from [Releases](../../releases) and run it —
+that is what puts Multiapp in the Start Menu, with an uninstaller in Add or Remove Programs. A
+portable `Multiapp.exe` is also published for people who would rather not install anything; a bare
+executable is registered nowhere by Windows, so it has an **＋ Start Menu** button in the UI that
+creates the shortcut on request.
+
+Verified on a real Windows 11 machine: the Start Menu entry appears after install, and a canary file
+placed among the profiles survived a silent uninstall — the uninstaller removes what it installed,
+not the directory tree it shares with the profile data.
+
+The command-line `multiapp.exe` is a separate, smaller download for scripting. No build step and no
+installer — `multiapp.ps1` runs on the PowerShell already in
 Windows. Read [`WINDOWS.md`](WINDOWS.md) first; it lists what is
 implemented and what has never been exercised.
 
