@@ -136,6 +136,71 @@ fn app_exists(app: String) -> bool {
     launch::resolve_app(&app).is_ok()
 }
 
+
+/// Where a Start Menu shortcut for this build would live.
+#[cfg(windows)]
+fn start_menu_lnk() -> Option<PathBuf> {
+    let appdata = std::env::var("APPDATA").ok()?;
+    Some(PathBuf::from(appdata).join(r"Microsoft\Windows\Start Menu\Programs\Multiapp.lnk"))
+}
+
+/// Is this build already in the Start Menu?
+#[tauri::command]
+fn in_start_menu() -> bool {
+    #[cfg(windows)]
+    {
+        start_menu_lnk().map(|p| p.exists()).unwrap_or(false)
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// Put this build in the Start Menu, on request.
+///
+/// A portable .exe is not registered anywhere by Windows — only an installer creates Start Menu
+/// entries — so running one from the Desktop leaves nothing in the Start Menu. This offers it as an
+/// explicit action rather than doing it silently on first run, which would be a surprising thing for
+/// a portable program to do to someone's machine.
+///
+/// The shortcut is written through WScript.Shell rather than by hand: a .lnk is a COM-serialised
+/// binary format, and driving IShellLink from here would mean a pile of unsafe FFI for one file.
+#[tauri::command]
+fn add_to_start_menu() -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let lnk = start_menu_lnk().ok_or("APPDATA is not set")?;
+        if let Some(dir) = lnk.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        let script = format!(
+            "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{lnk}');\
+             $s.TargetPath='{exe}';$s.WorkingDirectory='{dir}';$s.IconLocation='{exe},0';\
+             $s.Description='Run multiple isolated profiles of the same app';$s.Save()",
+            lnk = lnk.display(),
+            exe = exe.display(),
+            dir = exe.parent().map(|p| p.display().to_string()).unwrap_or_default(),
+        );
+        let out = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !lnk.exists() {
+            return Err(format!(
+                "could not create the shortcut: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        Ok(lnk.display().to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        Err("Start Menu shortcuts are a Windows feature".into())
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -146,6 +211,8 @@ fn main() {
             profiles_root,
             detect_apps,
             app_exists,
+            in_start_menu,
+            add_to_start_menu,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the Multiapp window");

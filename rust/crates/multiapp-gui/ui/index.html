@@ -76,6 +76,11 @@
   #status { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #status.err { color:var(--danger); }
   #status.ok  { color:var(--ok); }
+  .pin {
+    background:transparent; border:1px solid var(--line); color:var(--muted);
+    border-radius:7px; padding:3px 9px; font-size:11px; cursor:pointer; flex:none;
+  }
+  .pin:hover { color:var(--accent); border-color:var(--accent); }
 
   .backdrop {
     position:fixed; inset:0; background:rgba(0,0,0,.55); display:none;
@@ -114,7 +119,10 @@
 
   <main id="list"></main>
 
-  <footer><span id="status">Loading…</span></footer>
+  <footer>
+    <span id="status">Loading…</span>
+    <button class="pin" id="pin" hidden title="Add a Multiapp shortcut to the Start Menu">＋ Start Menu</button>
+  </footer>
 
   <div class="backdrop" id="backdrop">
     <div class="modal">
@@ -246,6 +254,24 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape" && $("backdrop").classList.contains("open")) $("cancel").click();
   if (e.key === "Enter" && $("backdrop").classList.contains("open")) $("create").click();
 });
+
+// A portable .exe is registered nowhere by Windows, so it never appears in the Start Menu. Offer it
+// as a button rather than doing it silently — and hide the button once the shortcut exists, and on
+// platforms where the whole idea does not apply.
+(async () => {
+  try {
+    const already = await invoke("in_start_menu");
+    if (!already && navigator.userAgent.includes("Windows")) $("pin").hidden = false;
+  } catch (_) {}
+})();
+$("pin").onclick = async () => {
+  try {
+    const p = await invoke("add_to_start_menu");
+    $("pin").hidden = true;
+    say("Added to the Start Menu", "ok");
+    console.log("shortcut:", p);
+  } catch (e) { say(e, "err"); }
+};
 
 refresh();
 setInterval(() => { if (!busy && !$("backdrop").classList.contains("open")) refresh(); }, 5000);

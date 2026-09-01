@@ -117,12 +117,27 @@ jobs:
       - name: Build the desktop UI
         run: cargo build --release -p multiapp-gui
 
+      # The bundler is what produces an INSTALLER. A bare .exe is registered nowhere by Windows, so
+      # it never lands in the Start Menu; the NSIS installer creates the Start Menu entry, the icon
+      # and an uninstaller. Both are shipped: the installer for normal use, the portable exe for
+      # people who would rather not install anything.
+      - name: Install the Tauri bundler
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Bundle installer
+        working-directory: rust/crates/multiapp-gui
+        run: cargo tauri build --no-bundle=false
+        continue-on-error: true
+
       - name: Stage
         shell: bash
         run: |
           mkdir -p dist
-          ls -la target/release/ | head -20
           cp "target/release/${{ matrix.artifact }}" "dist/${{ matrix.shipped }}"
+          # bundles land under target/release/bundle/<kind>/; take whatever this OS produced
+          find target/release/bundle -type f \( -name '*-setup.exe' -o -name '*.msi' -o -name '*.dmg' \) \
+            -exec cp {} dist/ \; 2>/dev/null || true
+          ls -la dist/
 
       - uses: actions/upload-artifact@v4
         with:
