@@ -96,10 +96,14 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: Multiapp.exe
+            # cargo names the binary after the CRATE; tauri.conf's productName only renames the
+            # bundled installer, not target/release/<bin>
+            artifact: multiapp-gui.exe
+            shipped: Multiapp.exe
             name: multiapp-gui-windows
           - os: macos-latest
             artifact: multiapp-gui
+            shipped: Multiapp
             name: multiapp-gui-macos
     steps:
       - uses: actions/checkout@v4
@@ -117,7 +121,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp "target/release/${{ matrix.artifact }}" "dist/${{ matrix.artifact }}"
+          ls -la target/release/ | head -20
+          cp "target/release/${{ matrix.artifact }}" "dist/${{ matrix.shipped }}"
 
       - uses: actions/upload-artifact@v4
         with:
