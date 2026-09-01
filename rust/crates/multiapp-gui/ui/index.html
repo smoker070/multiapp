@@ -5,276 +5,559 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Multiapp</title>
 <style>
-  /* Black + dark pink, the palette already used for the macOS installer. Both themes are defined
-     as tokens on :root so switching never leaves a colour hard-coded to one of them. */
+  /* Black + dark pink, the palette already used for the macOS installer. Both themes are declared as
+     tokens on :root, so nothing is ever hard-coded to one of them. */
   :root {
-    --bg:#0b0b0d; --panel:#141418; --panel-2:#1c1c22; --line:#2a2a32;
-    --text:#f2f2f5; --muted:#8b8b98; --accent:#e0246c; --accent-hover:#f43d83;
-    --ok:#31c76a; --warn:#e0a020; --danger:#e04b4b; --shadow:rgba(0,0,0,.5);
+    --bg:#0b0b0d; --panel:#141418; --panel-2:#1c1c22; --panel-3:#24242c; --line:#2a2a32;
+    --text:#f2f2f5; --muted:#8b8b98; --accent:#e0246c; --accent-2:#f43d83;
+    --ok:#31c76a; --warn:#e0a020; --danger:#e04b4b; --shadow:0 18px 50px rgba(0,0,0,.55);
+    --r:11px; --ease:cubic-bezier(.2,.8,.3,1);
   }
   :root[data-theme="light"] {
-    --bg:#f6f6f8; --panel:#ffffff; --panel-2:#f0f0f4; --line:#e2e2ea;
-    --text:#16161a; --muted:#6b6b78; --accent:#d0165e; --accent-hover:#b31150;
-    --ok:#1a9e4b; --warn:#a97300; --danger:#c0392b; --shadow:rgba(0,0,0,.12);
+    --bg:#f5f5f8; --panel:#ffffff; --panel-2:#f0f0f4; --panel-3:#e7e7ee; --line:#e0e0e8;
+    --text:#16161a; --muted:#6b6b78; --accent:#d0165e; --accent-2:#b31150;
+    --ok:#1a9e4b; --warn:#a2700a; --danger:#c0392b; --shadow:0 18px 40px rgba(0,0,0,.14);
   }
   * { box-sizing:border-box; }
   html,body { height:100%; margin:0; }
   body {
     background:var(--bg); color:var(--text);
     font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
-    display:flex; flex-direction:column; user-select:none; -webkit-user-select:none;
+    display:flex; flex-direction:column; overflow:hidden;
+    user-select:none; -webkit-user-select:none;
   }
+  /* Anyone who has asked the OS to reduce motion gets none of this. */
+  @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation:none !important; transition:none !important; } }
+
   header {
-    display:flex; align-items:center; gap:10px;
-    padding:14px 16px; border-bottom:1px solid var(--line); background:var(--panel);
+    display:flex; align-items:center; gap:10px; padding:13px 15px;
+    border-bottom:1px solid var(--line); background:var(--panel); flex:none;
   }
-  header img { width:26px; height:26px; border-radius:6px; }
+  header img { width:26px; height:26px; border-radius:7px; }
   header h1 { font-size:15px; font-weight:650; margin:0; letter-spacing:.2px; flex:1; }
-  .icon-btn {
+
+  button { font-family:inherit; }
+  .btn {
+    border-radius:9px; border:1px solid transparent; cursor:pointer;
+    font-size:13px; font-weight:600; padding:9px 14px;
+    transition:transform .12s var(--ease), background .16s, border-color .16s, box-shadow .16s, color .16s;
+  }
+  .btn:hover  { transform:translateY(-1px); }
+  .btn:active { transform:translateY(0) scale(.975); }
+  .btn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .btn[disabled] { opacity:.45; cursor:default; transform:none !important; }
+  .primary { background:var(--accent); color:#fff; box-shadow:0 4px 14px -6px var(--accent); }
+  .primary:hover { background:var(--accent-2); box-shadow:0 8px 20px -8px var(--accent); }
+  .ghost { background:var(--panel-2); color:var(--text); border-color:var(--line); }
+  .ghost:hover { border-color:var(--accent); color:var(--accent); }
+  .icon {
     background:transparent; border:1px solid var(--line); color:var(--muted);
-    width:30px; height:30px; border-radius:8px; cursor:pointer; font-size:14px;
-    display:grid; place-items:center;
+    width:31px; height:31px; border-radius:9px; cursor:pointer; font-size:14px;
+    display:grid; place-items:center; flex:none;
+    transition:transform .12s var(--ease), color .16s, border-color .16s, background .16s;
   }
-  .icon-btn:hover { color:var(--text); border-color:var(--accent); }
+  .icon:hover  { color:var(--accent); border-color:var(--accent); transform:translateY(-1px) rotate(-6deg); }
+  .icon:active { transform:scale(.92); }
+  .icon.spin   { animation:spin .7s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
 
-  .toolbar { display:flex; gap:8px; padding:12px 16px; }
-  button.primary {
-    background:var(--accent); color:#fff; border:0; border-radius:9px;
-    padding:9px 14px; font-size:13px; font-weight:600; cursor:pointer; flex:1;
-  }
-  button.primary:hover { background:var(--accent-hover); }
-  button.ghost {
-    background:var(--panel-2); color:var(--text); border:1px solid var(--line);
-    border-radius:9px; padding:9px 14px; font-size:13px; cursor:pointer;
-  }
-  button.ghost:hover { border-color:var(--accent); }
-  button:disabled { opacity:.5; cursor:default; }
+  .toolbar { display:flex; gap:8px; padding:11px 15px 9px; flex:none; }
+  .toolbar .primary { flex:1; }
 
-  main { flex:1; overflow-y:auto; padding:0 16px 16px; }
+  main { flex:1; overflow-y:auto; padding:0 15px 12px; scrollbar-width:thin; }
+  main::-webkit-scrollbar { width:9px; }
+  main::-webkit-scrollbar-thumb { background:var(--panel-3); border-radius:9px; border:3px solid var(--bg); }
+
   .row {
-    display:flex; align-items:center; gap:10px; padding:11px 12px; margin-bottom:8px;
-    background:var(--panel); border:1px solid var(--line); border-radius:11px;
+    display:flex; align-items:center; gap:10px; padding:10px 11px; margin-bottom:8px;
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
+    animation:rise .26s var(--ease) both;
+    transition:border-color .16s, transform .14s var(--ease), box-shadow .16s;
   }
+  .row:hover { border-color:var(--panel-3); transform:translateY(-1px); box-shadow:0 6px 18px -12px rgba(0,0,0,.7); }
+  @keyframes rise { from { opacity:0; transform:translateY(7px); } to { opacity:1; transform:none; } }
   .row .meta { flex:1; min-width:0; }
-  .row .app { font-weight:600; }
-  .row .prof { color:var(--muted); font-size:12px; }
-  .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); flex:none; }
-  .dot.run { background:var(--ok); box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 25%,transparent); }
+  .row .app  { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .row .sub  { color:var(--muted); font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); flex:none; transition:background .2s; }
+  .dot.run { background:var(--ok); animation:pulse 2.2s ease-in-out infinite; }
   .dot.unknown { background:var(--warn); }
-  .row button { padding:6px 12px; font-size:12px; border-radius:8px; cursor:pointer; }
-  .btn-launch { background:var(--accent); color:#fff; border:0; }
-  .btn-launch:hover { background:var(--accent-hover); }
-  .btn-stop { background:transparent; color:var(--danger); border:1px solid var(--danger); }
+  @keyframes pulse {
+    0%,100% { box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 55%,transparent); }
+    70%     { box-shadow:0 0 0 6px transparent; }
+  }
+  .row .btn { padding:6px 12px; font-size:12px; }
+  .stop { background:transparent; color:var(--danger); border-color:var(--danger); }
+  .stop:hover { background:var(--danger); color:#fff; }
 
-  .empty { text-align:center; color:var(--muted); padding:44px 20px; }
+  .menu-wrap { position:relative; flex:none; }
+  .menu {
+    position:absolute; right:0; top:calc(100% + 6px); z-index:40; min-width:172px;
+    background:var(--panel-2); border:1px solid var(--line); border-radius:11px;
+    box-shadow:var(--shadow); padding:5px; display:none;
+    transform-origin:top right; animation:pop .16s var(--ease);
+  }
+  .menu.open { display:block; }
+  @keyframes pop { from { opacity:0; transform:scale(.94) translateY(-4px); } to { opacity:1; transform:none; } }
+  .menu button {
+    display:block; width:100%; text-align:left; background:transparent; border:0; color:var(--text);
+    padding:7px 10px; border-radius:7px; font-size:12.5px; cursor:pointer; transition:background .12s, color .12s;
+  }
+  .menu button:hover { background:var(--panel-3); }
+  .menu button.danger { color:var(--danger); }
+  .menu button.danger:hover { background:var(--danger); color:#fff; }
+  .menu hr { border:0; border-top:1px solid var(--line); margin:5px 2px; }
+
+  .empty { text-align:center; color:var(--muted); padding:40px 18px; animation:rise .3s var(--ease) both; }
   .empty b { display:block; color:var(--text); margin-bottom:6px; font-size:14px; }
 
   footer {
-    border-top:1px solid var(--line); padding:9px 16px; font-size:11px; color:var(--muted);
-    display:flex; gap:8px; align-items:center; background:var(--panel);
+    border-top:1px solid var(--line); padding:8px 15px; font-size:11px; color:var(--muted);
+    display:flex; gap:8px; align-items:center; background:var(--panel); flex:none;
   }
-  #status { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #status.err { color:var(--danger); }
-  #status.ok  { color:var(--ok); }
-  .pin {
-    background:transparent; border:1px solid var(--line); color:var(--muted);
-    border-radius:7px; padding:3px 9px; font-size:11px; cursor:pointer; flex:none;
-  }
-  .pin:hover { color:var(--accent); border-color:var(--accent); }
+  #status { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; transition:color .2s; }
+  #status.err { color:var(--danger); } #status.ok { color:var(--ok); }
+  .pin { background:transparent; border:1px solid var(--line); color:var(--muted);
+         border-radius:7px; padding:3px 9px; font-size:11px; cursor:pointer; flex:none;
+         transition:color .16s, border-color .16s, transform .12s var(--ease); }
+  .pin:hover { color:var(--accent); border-color:var(--accent); transform:translateY(-1px); }
 
   .backdrop {
-    position:fixed; inset:0; background:rgba(0,0,0,.55); display:none;
-    align-items:center; justify-content:center; padding:20px;
+    position:fixed; inset:0; background:rgba(0,0,0,.5); backdrop-filter:blur(3px);
+    display:none; align-items:center; justify-content:center; padding:18px; z-index:60;
+    animation:fade .16s ease both;
   }
   .backdrop.open { display:flex; }
+  @keyframes fade { from { opacity:0; } to { opacity:1; } }
   .modal {
-    background:var(--panel); border:1px solid var(--line); border-radius:14px;
-    padding:18px; width:100%; max-width:360px; box-shadow:0 18px 50px var(--shadow);
+    background:var(--panel); border:1px solid var(--line); border-radius:15px;
+    padding:17px; width:100%; max-width:352px; box-shadow:var(--shadow);
+    animation:zoom .2s var(--ease) both; max-height:88vh; overflow-y:auto;
   }
-  .modal h2 { margin:0 0 14px; font-size:14px; text-align:center; }
-  label { display:block; font-size:11px; color:var(--muted); margin:10px 0 5px; }
-  input {
+  @keyframes zoom { from { opacity:0; transform:scale(.95) translateY(8px); } to { opacity:1; transform:none; } }
+  .modal h2 { margin:0 0 13px; font-size:14px; text-align:center; }
+  label { display:block; font-size:11px; color:var(--muted); margin:11px 0 5px; }
+  input, select {
     width:100%; padding:9px 11px; border-radius:9px; border:1px solid var(--line);
-    background:var(--panel-2); color:var(--text); font-size:13px; user-select:text;
+    background:var(--panel-2); color:var(--text); font-size:13px; font-family:inherit;
+    user-select:text; transition:border-color .16s, box-shadow .16s;
   }
-  input:focus { outline:none; border-color:var(--accent); }
-  .hint { font-size:11px; color:var(--muted); margin-top:6px; min-height:15px; }
-  .hint.bad { color:var(--danger); }
-  .hint.good { color:var(--ok); }
-  .modal-actions { display:flex; gap:8px; margin-top:16px; }
-  .modal-actions button { flex:1; }
+  input:focus, select:focus {
+    outline:none; border-color:var(--accent);
+    box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 18%,transparent);
+  }
+  .hint { font-size:11px; color:var(--muted); margin-top:6px; min-height:15px; transition:color .2s; }
+  .hint.bad { color:var(--danger); } .hint.good { color:var(--ok); }
+  .actions { display:flex; gap:8px; margin-top:15px; }
+  .actions .btn { flex:1; }
+
+  .seg { display:flex; gap:6px; }
+  .seg button {
+    flex:1; padding:8px 0; border-radius:9px; border:1px solid var(--line);
+    background:var(--panel-2); color:var(--muted); font-size:12px; font-weight:600; cursor:pointer;
+    transition:all .16s var(--ease);
+  }
+  .seg button:hover { color:var(--text); }
+  .seg button[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .seg button:active { transform:scale(.96); }
+
+  .adv { margin-top:14px; padding-top:13px; border-top:1px solid var(--line); }
+  .adv h3 { font-size:11px; color:var(--muted); margin:0 0 8px; font-weight:600; letter-spacing:.4px; text-transform:uppercase; }
+  .adv .grid { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
+  .adv .grid .btn { padding:8px 6px; font-size:12px; font-weight:600; }
+  .note { font-size:11px; color:var(--muted); line-height:1.5; margin-top:9px; }
+  pre {
+    background:var(--panel-2); border:1px solid var(--line); border-radius:9px; padding:10px;
+    font-size:11px; max-height:230px; overflow:auto; white-space:pre-wrap; word-break:break-word;
+    user-select:text; margin:0;
+  }
 </style>
 </head>
 <body>
   <header>
     <img src="logo.png" alt="">
     <h1>Multiapp</h1>
-    <button class="icon-btn" id="theme" title="Light / dark">◑</button>
+    <button class="icon" id="refresh" title="Rescan">↻</button>
+    <button class="icon" id="settings" title="Settings">⚙</button>
   </header>
 
   <div class="toolbar">
-    <button class="primary" id="new">New Profile</button>
-    <button class="ghost" id="refresh" title="Refresh">↻</button>
+    <button class="btn primary" id="new" data-i18n="newProfile">New Profile</button>
+    <button class="btn ghost" id="advBtn" data-i18n="tools" hidden>Tools</button>
   </div>
 
   <main id="list"></main>
 
   <footer>
-    <span id="status">Loading…</span>
-    <button class="pin" id="pin" hidden title="Add a Multiapp shortcut to the Start Menu">＋ Start Menu</button>
+    <span id="status">…</span>
+    <button class="pin" id="pin" hidden data-i18n="addStart">＋ Start Menu</button>
   </footer>
 
-  <div class="backdrop" id="backdrop">
+  <!-- New / rename / clone all reuse one dialog: same shape, different verb -->
+  <div class="backdrop" id="bdProfile">
     <div class="modal">
-      <h2>New Profile</h2>
-      <label for="app">Application</label>
-      <input id="app" list="apps" placeholder="Microsoft Edge" autocomplete="off">
-      <datalist id="apps"></datalist>
-      <div class="hint" id="app-hint"></div>
-      <label for="name">Profile name</label>
-      <input id="name" placeholder="work" autocomplete="off">
-      <div class="hint" id="name-hint"></div>
-      <div class="modal-actions">
-        <button class="ghost" id="cancel">Cancel</button>
-        <button class="primary" id="create">Create</button>
+      <h2 id="pTitle">New Profile</h2>
+      <div id="appRow">
+        <label for="app" data-i18n="application">Application</label>
+        <input id="app" list="apps" placeholder="Microsoft Edge" autocomplete="off">
+        <datalist id="apps"></datalist>
+        <div class="hint" id="appHint"></div>
       </div>
+      <label for="pname" data-i18n="profileName">Profile name</label>
+      <input id="pname" placeholder="work" autocomplete="off">
+      <div class="hint" id="nameHint"></div>
+      <div class="actions">
+        <button class="btn ghost" id="pCancel" data-i18n="cancel">Cancel</button>
+        <button class="btn primary" id="pOk" data-i18n="create">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="backdrop" id="bdConfirm">
+    <div class="modal">
+      <h2 id="cTitle">Delete profile</h2>
+      <div class="note" id="cBody"></div>
+      <div class="actions">
+        <button class="btn ghost" id="cCancel" data-i18n="cancel">Cancel</button>
+        <button class="btn primary" id="cOk" style="background:var(--danger);box-shadow:none" data-i18n="delete">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="backdrop" id="bdSettings">
+    <div class="modal">
+      <h2 data-i18n="settings">Settings</h2>
+      <label data-i18n="theme">Theme</label>
+      <div class="seg" id="themeSeg">
+        <button data-v="dark"   data-i18n="dark">Dark</button>
+        <button data-v="light"  data-i18n="light">Light</button>
+        <button data-v="system" data-i18n="system">System</button>
+      </div>
+      <label data-i18n="language">Language</label>
+      <div class="seg" id="langSeg">
+        <button data-v="en">English</button>
+        <button data-v="uz">O‘zbek</button>
+        <button data-v="ru">Русский</button>
+      </div>
+      <label data-i18n="storage">Profile storage</label>
+      <div class="note" id="rootPath" style="user-select:text"></div>
+      <div class="actions"><button class="btn ghost" id="sClose" data-i18n="close">Close</button></div>
+    </div>
+  </div>
+
+  <div class="backdrop" id="bdTools">
+    <div class="modal">
+      <h2 data-i18n="tools">Tools</h2>
+      <div class="adv">
+        <h3 data-i18n="appData">App data &amp; logins</h3>
+        <div class="grid">
+          <button class="btn ghost" data-cmd="migrate-list"  data-i18n="whatCanBackup">What can be backed up</button>
+          <button class="btn ghost" data-cmd="list-installed" data-i18n="installedApps">Installed apps</button>
+          <button class="btn ghost" data-cmd="sessions"      data-i18n="claudeSessions">Claude sessions</button>
+          <button class="btn ghost" data-cmd="apps"          data-i18n="compat">Compatibility</button>
+        </div>
+        <div class="note" data-i18n="toolsNote"></div>
+      </div>
+      <pre id="toolsOut" hidden></pre>
+      <div class="actions"><button class="btn ghost" id="tClose" data-i18n="close">Close</button></div>
     </div>
   </div>
 
 <script>
 const invoke = window.__TAURI__.core.invoke;
 const $ = id => document.getElementById(id);
-let busy = false;
+let rows = [], busy = false, openMenu = null;
 
+/* ---------------------------------------------------------------- i18n */
+const T = {
+  en: { newProfile:"New Profile", tools:"Tools", settings:"Settings", theme:"Theme", dark:"Dark",
+        light:"Light", system:"System", language:"Language", storage:"Profile storage", close:"Close",
+        application:"Application", profileName:"Profile name", cancel:"Cancel", create:"Create",
+        rename:"Rename", clone:"Clone", delete:"Delete", launch:"Launch", stop:"Stop",
+        openFolder:"Open folder", running:"running", stopped:"stopped", unknown:"unknown",
+        noneTitle:"No profiles yet", noneBody:"Create one to run a second, separate copy of an app — its own login, cookies and settings.",
+        addStart:"＋ Start Menu", addedStart:"Added to the Start Menu",
+        launching:"Launching", quitting:"Asking it to quit…", stoppedMsg:"Stopped",
+        notExit:"did not exit — quit it from the app itself", created:"Created", renamed:"Renamed",
+        cloned:"Cloned", movedTrash:"Moved to Trash", found:"found on this machine",
+        notFound:"not found — check the name or paste a full path", bothRequired:"Both fields are required.",
+        deleteTitle:"Delete profile", deleteBody:"This moves __N__ to Multiapp's Trash. Nothing is erased — it can be restored from there.",
+        profiles:"profiles", profile:"profile", appData:"App data & logins",
+        whatCanBackup:"What can be backed up", installedApps:"Installed apps",
+        claudeSessions:"Claude sessions", compat:"Compatibility",
+        toolsNote:"Backup, restore, export and session transfer are macOS-only for now: they are built on the Keychain and on macOS app layouts, and the Windows equivalents have not been researched yet.",
+        toolsMissing:"Install the command-line tool to enable these (run ./multiapp install-stub once)." },
+  uz: { newProfile:"Yangi profil", tools:"Vositalar", settings:"Sozlamalar", theme:"Mavzu", dark:"Qorong‘i",
+        light:"Yorug‘", system:"Tizim", language:"Til", storage:"Profillar joyi", close:"Yopish",
+        application:"Ilova", profileName:"Profil nomi", cancel:"Bekor qilish", create:"Yaratish",
+        rename:"Nomini o‘zgartirish", clone:"Nusxa olish", delete:"O‘chirish", launch:"Ochish", stop:"To‘xtatish",
+        openFolder:"Papkani ochish", running:"ishlamoqda", stopped:"to‘xtagan", unknown:"noma’lum",
+        noneTitle:"Hali profil yo‘q", noneBody:"Ilovaning ikkinchi, alohida nusxasini ishlatish uchun profil yarating — o‘z logini, cookie va sozlamalari bilan.",
+        addStart:"＋ Start menyusi", addedStart:"Start menyusiga qo‘shildi",
+        launching:"Ochilmoqda", quitting:"Yopishni so‘ramoqda…", stoppedMsg:"To‘xtatildi",
+        notExit:"yopilmadi — ilovaning o‘zidan chiqing", created:"Yaratildi", renamed:"Nomi o‘zgartirildi",
+        cloned:"Nusxa olindi", movedTrash:"Savatga ko‘chirildi", found:"bu kompyuterda topildi",
+        notFound:"topilmadi — nomni tekshiring yoki to‘liq yo‘lni kiriting", bothRequired:"Ikkala maydon ham to‘ldirilishi kerak.",
+        deleteTitle:"Profilni o‘chirish", deleteBody:"__N__ Multiapp savatiga ko‘chiriladi. Hech narsa yo‘qolmaydi — undan qaytarish mumkin.",
+        profiles:"profil", profile:"profil", appData:"Ilova ma’lumotlari va loginlar",
+        whatCanBackup:"Nimani saqlash mumkin", installedApps:"O‘rnatilgan ilovalar",
+        claudeSessions:"Claude sessiyalari", compat:"Moslik",
+        toolsNote:"Zaxiralash, tiklash, eksport va sessiya ko‘chirish hozircha faqat macOS uchun: ular Keychain va macOS ilova tuzilishiga asoslangan, Windows uchun ekvivalenti hali o‘rganilmagan.",
+        toolsMissing:"Bularni yoqish uchun buyruq qatori vositasini o‘rnating (bir marta ./multiapp install-stub)." },
+  ru: { newProfile:"Новый профиль", tools:"Инструменты", settings:"Настройки", theme:"Тема", dark:"Тёмная",
+        light:"Светлая", system:"Системная", language:"Язык", storage:"Хранилище профилей", close:"Закрыть",
+        application:"Приложение", profileName:"Имя профиля", cancel:"Отмена", create:"Создать",
+        rename:"Переименовать", clone:"Клонировать", delete:"Удалить", launch:"Запустить", stop:"Остановить",
+        openFolder:"Открыть папку", running:"работает", stopped:"остановлен", unknown:"неизвестно",
+        noneTitle:"Профилей пока нет", noneBody:"Создайте профиль, чтобы запустить вторую, отдельную копию приложения — со своим входом, куками и настройками.",
+        addStart:"＋ Меню «Пуск»", addedStart:"Добавлено в меню «Пуск»",
+        launching:"Запуск", quitting:"Просим приложение закрыться…", stoppedMsg:"Остановлен",
+        notExit:"не закрылся — закройте его из самого приложения", created:"Создан", renamed:"Переименован",
+        cloned:"Клонирован", movedTrash:"Перемещён в корзину", found:"найдено на этом компьютере",
+        notFound:"не найдено — проверьте имя или укажите полный путь", bothRequired:"Оба поля обязательны.",
+        deleteTitle:"Удалить профиль", deleteBody:"__N__ будет перемещён в корзину Multiapp. Ничего не стирается — его можно восстановить.",
+        profiles:"профилей", profile:"профиль", appData:"Данные приложений и входы",
+        whatCanBackup:"Что можно сохранить", installedApps:"Установленные приложения",
+        claudeSessions:"Сессии Claude", compat:"Совместимость",
+        toolsNote:"Резервное копирование, восстановление, экспорт и перенос сессий пока только для macOS: они построены на Keychain и структуре приложений macOS, а эквиваленты для Windows ещё не исследованы.",
+        toolsMissing:"Установите инструмент командной строки, чтобы включить это (один раз ./multiapp install-stub)." },
+};
+let lang = "en";
+const t = k => (T[lang] && T[lang][k]) || T.en[k] || k;
+function applyLang() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll("[data-i18n]").forEach(e => { e.textContent = t(e.dataset.i18n); });
+  render();
+}
+
+/* ---------------------------------------------------------------- theme */
+function applyTheme(v) {
+  const media = window.matchMedia("(prefers-color-scheme: dark)");
+  document.documentElement.dataset.theme = v === "system" ? (media.matches ? "dark" : "light") : v;
+}
+function loadPrefs() {
+  try {
+    lang = localStorage.getItem("lang") || "en";
+    const th = localStorage.getItem("theme") || "dark";
+    applyTheme(th);
+    mark("themeSeg", th); mark("langSeg", lang);
+  } catch (_) { applyTheme("dark"); }
+}
+function mark(segId, v) {
+  $(segId).querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === v)));
+}
+// follow the OS while "system" is selected
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  try { if ((localStorage.getItem("theme") || "dark") === "system") applyTheme("system"); } catch (_) {}
+});
+
+/* ---------------------------------------------------------------- helpers */
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 function say(msg, kind = "") { const s = $("status"); s.textContent = msg; s.className = kind; }
+function stamp() {
+  const d = new Date(), p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+function closeMenus() { if (openMenu) { openMenu.classList.remove("open"); openMenu = null; } }
+document.addEventListener("click", closeMenus);
 
-function esc(s) {
-  return String(s).replace(/[&<>"']/g, c =>
-    ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+/* ---------------------------------------------------------------- list */
+function render() {
+  const list = $("list");
+  if (!rows.length) {
+    list.innerHTML = `<div class="empty"><b>${esc(t("noneTitle"))}</b>${esc(t("noneBody"))}</div>`;
+    return;
+  }
+  list.innerHTML = rows.map((p, i) => {
+    // "unknown" stays its own state: it means processes existed that could not be inspected, and
+    // calling that "stopped" would be a claim the tool cannot support
+    const cls   = p.running ? "run" : (p.certain ? "" : "unknown");
+    const state = p.running ? t("running") : (p.certain ? t("stopped") : t("unknown"));
+    const main  = p.running
+      ? `<button class="btn stop" data-act="stop" data-i="${i}">${esc(t("stop"))}</button>`
+      : `<button class="btn primary" data-act="launch" data-i="${i}">${esc(t("launch"))}</button>`;
+    return `<div class="row" style="animation-delay:${Math.min(i,8)*22}ms">
+      <span class="dot ${cls}" title="${esc(state)}"></span>
+      <span class="meta"><div class="app">${esc(p.app)}</div><div class="sub">${esc(p.name)} · ${esc(state)}</div></span>
+      ${main}
+      <span class="menu-wrap">
+        <button class="icon" data-act="menu" data-i="${i}" title="…">⋯</button>
+        <div class="menu">
+          <button data-act="reveal" data-i="${i}">${esc(t("openFolder"))}</button>
+          <button data-act="rename" data-i="${i}">${esc(t("rename"))}</button>
+          <button data-act="clone"  data-i="${i}">${esc(t("clone"))}</button>
+          <hr>
+          <button class="danger" data-act="delete" data-i="${i}">${esc(t("delete"))}</button>
+        </div>
+      </span></div>`;
+  }).join("");
+  list.querySelectorAll("[data-act]").forEach(b => {
+    b.onclick = ev => { ev.stopPropagation(); act(b.dataset.act, rows[+b.dataset.i], b); };
+  });
+  say(`${rows.length} ${rows.length === 1 ? t("profile") : t("profiles")}`);
 }
 
 async function refresh() {
-  try {
-    const rows = await invoke("list_profiles");
-    const list = $("list");
-    if (!rows.length) {
-      list.innerHTML = `<div class="empty"><b>No profiles yet</b>
-        Create one to run a second, separate copy of an app —<br>its own login, cookies and settings.</div>`;
-      say(await invoke("profiles_root"));
-      return;
-    }
-    list.innerHTML = rows.map((p, i) => {
-      // "unknown" is shown as its own state on purpose: it means processes existed that could not be
-      // inspected, and calling that "stopped" would be a claim the tool cannot support
-      const cls = p.running ? "run" : (p.certain ? "" : "unknown");
-      const state = p.running ? "running" : (p.certain ? "stopped" : "unknown");
-      const btn = p.running
-        ? `<button class="btn-stop" data-act="stop" data-i="${i}">Stop</button>`
-        : `<button class="btn-launch" data-act="launch" data-i="${i}">Launch</button>`;
-      return `<div class="row"><span class="dot ${cls}" title="${state}"></span>
-        <span class="meta"><div class="app">${esc(p.app)}</div>
-        <div class="prof">${esc(p.name)} · ${state}</div></span>${btn}</div>`;
-    }).join("");
-    list.querySelectorAll("button[data-act]").forEach(b => {
-      b.onclick = () => act(b.dataset.act, rows[+b.dataset.i]);
-    });
-    say(`${rows.length} profile${rows.length > 1 ? "s" : ""}`);
-  } catch (e) { say(e, "err"); }
+  try { rows = await invoke("list_profiles"); render(); }
+  catch (e) { say(e, "err"); }
 }
 
-async function act(kind, p) {
+function lock(on) {
+  busy = on;
+  document.querySelectorAll(".btn,.icon").forEach(b => { b.disabled = on; });
+  $("refresh").classList.toggle("spin", on);
+}
+
+async function act(kind, p, el) {
+  if (kind === "menu") {
+    const m = el.parentElement.querySelector(".menu");
+    const wasOpen = m.classList.contains("open");
+    closeMenus();
+    if (!wasOpen) { m.classList.add("open"); openMenu = m; }
+    return;
+  }
+  closeMenus();
   if (busy) return;
-  busy = true;
-  document.querySelectorAll("button").forEach(b => b.disabled = true);
+  if (kind === "rename" || kind === "clone") return openProfileDialog(kind, p);
+  if (kind === "delete") return confirmDelete(p);
+
+  lock(true);
   try {
     if (kind === "launch") {
-      say(`Launching ${p.app} · ${p.name}…`);
+      say(`${t("launching")} ${p.app} · ${p.name}…`);
       await invoke("launch_profile", { app: p.app, name: p.name });
-      say(`Launched ${p.name}`, "ok");
-    } else {
-      say(`Asking ${p.app} to quit…`);
+      say(`${t("launching")} ${p.name}`, "ok");
+    } else if (kind === "stop") {
+      say(t("quitting"));
       const done = await invoke("stop_profile", { app: p.app, name: p.name });
-      // A refusal is normal, not an error: multiapp never force-kills, because that loses unsaved work.
-      say(done ? `Stopped ${p.name}` : `${p.name} did not exit — quit it from the app itself`,
-          done ? "ok" : "err");
+      // a refusal is normal, not an error: multiapp never force-kills
+      say(done ? `${t("stoppedMsg")} ${p.name}` : `${p.name} ${t("notExit")}`, done ? "ok" : "err");
+    } else if (kind === "reveal") {
+      await invoke("reveal_profile", { app: p.app, name: p.name });
     }
   } catch (e) { say(e, "err"); }
-  busy = false;
-  document.querySelectorAll("button").forEach(b => b.disabled = false);
-  setTimeout(refresh, kind === "launch" ? 2500 : 500);
+  lock(false);
+  setTimeout(refresh, kind === "launch" ? 2500 : 600);
 }
 
-$("refresh").onclick = refresh;
-$("theme").onclick = () => {
-  const r = document.documentElement;
-  const next = r.dataset.theme === "dark" ? "light" : "dark";
-  r.dataset.theme = next;
-  try { localStorage.setItem("theme", next); } catch (_) {}
-};
-try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (_) {}
+/* ---------------------------------------------------------------- dialogs */
+let mode = "new", target = null;
+function openProfileDialog(kind, p) {
+  mode = kind; target = p || null;
+  $("pTitle").textContent = kind === "new" ? t("newProfile") : kind === "rename" ? t("rename") : t("clone");
+  $("pOk").textContent    = kind === "new" ? t("create")     : kind === "rename" ? t("rename") : t("clone");
+  $("appRow").hidden = kind !== "new";
+  $("app").value = p ? p.app : "";
+  $("pname").value = kind === "clone" && p ? `${p.name} 2` : (kind === "rename" && p ? p.name : "");
+  $("appHint").textContent = ""; $("nameHint").textContent = "";
+  $("bdProfile").classList.add("open");
+  setTimeout(() => (kind === "new" ? $("app") : $("pname")).focus(), 40);
+  if (kind === "new") invoke("detect_apps").then(a => {
+    $("apps").innerHTML = a.map(x => `<option value="${esc(x.name)}">`).join("");
+  }).catch(() => {});
+}
+$("new").onclick = () => openProfileDialog("new", null);
+$("pCancel").onclick = () => $("bdProfile").classList.remove("open");
 
-$("new").onclick = async () => {
-  $("backdrop").classList.add("open");
-  $("app").value = ""; $("name").value = "";
-  $("app-hint").textContent = ""; $("name-hint").textContent = "";
-  $("app").focus();
-  try {
-    const apps = await invoke("detect_apps");
-    $("apps").innerHTML = apps.map(a => `<option value="${esc(a.name)}">`).join("");
-  } catch (_) {}
-};
-$("cancel").onclick = () => $("backdrop").classList.remove("open");
-$("backdrop").onclick = e => { if (e.target === $("backdrop")) $("cancel").click(); };
-
-let checkTimer;
+let checkT;
 $("app").oninput = () => {
-  clearTimeout(checkTimer);
-  const v = $("app").value.trim();
-  const h = $("app-hint");
+  clearTimeout(checkT);
+  const v = $("app").value.trim(), h = $("appHint");
   if (!v) { h.textContent = ""; h.className = "hint"; return; }
-  checkTimer = setTimeout(async () => {
+  checkT = setTimeout(async () => {
     const ok = await invoke("app_exists", { app: v });
-    h.textContent = ok ? "found on this machine" : "not found — check the name or paste a full path";
-    h.className = ok ? "hint good" : "hint bad";
+    h.textContent = ok ? t("found") : t("notFound");
+    h.className = "hint " + (ok ? "good" : "bad");
   }, 250);
 };
 
-$("create").onclick = async () => {
-  const app = $("app").value.trim(), name = $("name").value.trim();
-  if (!app || !name) { $("name-hint").textContent = "Both fields are required."; $("name-hint").className = "hint bad"; return; }
+$("pOk").onclick = async () => {
+  const name = $("pname").value.trim(), app = mode === "new" ? $("app").value.trim() : target.app;
+  if (!name || (mode === "new" && !app)) {
+    $("nameHint").textContent = t("bothRequired"); $("nameHint").className = "hint bad"; return;
+  }
   try {
-    await invoke("create_profile", { app, name });
-    $("backdrop").classList.remove("open");
-    say(`Created ${app} · ${name}`, "ok");
+    if (mode === "new")         { await invoke("create_profile", { app, name }); say(`${t("created")} ${name}`, "ok"); }
+    else if (mode === "rename") { await invoke("rename_profile", { app, old: target.name, new: name }); say(`${t("renamed")} → ${name}`, "ok"); }
+    else                        { await invoke("clone_profile",  { app, from: target.name, to: name }); say(`${t("cloned")} → ${name}`, "ok"); }
+    $("bdProfile").classList.remove("open");
     refresh();
-  } catch (e) { $("name-hint").textContent = e; $("name-hint").className = "hint bad"; }
+  } catch (e) { $("nameHint").textContent = e; $("nameHint").className = "hint bad"; }
 };
 
-document.addEventListener("keydown", e => {
-  if (e.key === "Escape" && $("backdrop").classList.contains("open")) $("cancel").click();
-  if (e.key === "Enter" && $("backdrop").classList.contains("open")) $("create").click();
+function confirmDelete(p) {
+  target = p;
+  $("cTitle").textContent = t("deleteTitle");
+  $("cBody").textContent = t("deleteBody").replace("__N__", `${p.app} · ${p.name}`);
+  $("bdConfirm").classList.add("open");
+}
+$("cCancel").onclick = () => $("bdConfirm").classList.remove("open");
+$("cOk").onclick = async () => {
+  try {
+    await invoke("delete_profile", { app: target.app, name: target.name, stamp: stamp() });
+    say(`${t("movedTrash")}: ${target.name}`, "ok");
+    $("bdConfirm").classList.remove("open");
+    refresh();
+  } catch (e) { say(e, "err"); $("bdConfirm").classList.remove("open"); }
+};
+
+/* ---------------------------------------------------------------- settings */
+$("settings").onclick = async () => {
+  $("bdSettings").classList.add("open");
+  try { $("rootPath").textContent = await invoke("profiles_root"); } catch (_) {}
+};
+$("sClose").onclick = () => $("bdSettings").classList.remove("open");
+$("themeSeg").onclick = e => {
+  const b = e.target.closest("button"); if (!b) return;
+  applyTheme(b.dataset.v); mark("themeSeg", b.dataset.v);
+  try { localStorage.setItem("theme", b.dataset.v); } catch (_) {}
+};
+$("langSeg").onclick = e => {
+  const b = e.target.closest("button"); if (!b) return;
+  lang = b.dataset.v; mark("langSeg", lang);
+  try { localStorage.setItem("lang", lang); } catch (_) {}
+  applyLang();
+};
+
+/* ---------------------------------------------------------------- tools */
+$("advBtn").onclick = () => { $("toolsOut").hidden = true; $("bdTools").classList.add("open"); };
+$("tClose").onclick = () => $("bdTools").classList.remove("open");
+$("bdTools").querySelectorAll("[data-cmd]").forEach(b => {
+  b.onclick = async () => {
+    const out = $("toolsOut");
+    out.hidden = false; out.textContent = "…";
+    try { out.textContent = (await invoke("run_advanced", { args: [b.dataset.cmd] })) || "(no output)"; }
+    catch (e) { out.textContent = String(e); }
+  };
 });
 
-// A portable .exe is registered nowhere by Windows, so it never appears in the Start Menu. Offer it
-// as a button rather than doing it silently — and hide the button once the shortcut exists, and on
-// platforms where the whole idea does not apply.
+document.querySelectorAll(".backdrop").forEach(bd => {
+  bd.onclick = e => { if (e.target === bd) bd.classList.remove("open"); };
+});
+document.addEventListener("keydown", e => {
+  const open = document.querySelector(".backdrop.open");
+  if (!open) return;
+  if (e.key === "Escape") open.classList.remove("open");
+  if (e.key === "Enter" && open === $("bdProfile")) $("pOk").click();
+  if (e.key === "Enter" && open === $("bdConfirm")) $("cOk").click();
+});
+
+$("refresh").onclick = () => { $("refresh").classList.add("spin"); refresh().finally(() => setTimeout(() => $("refresh").classList.remove("spin"), 350)); };
+
+/* ---------------------------------------------------------------- boot */
 (async () => {
+  loadPrefs(); applyLang();
+  await refresh();
+  try { if (await invoke("advanced_available")) $("advBtn").hidden = false; } catch (_) {}
   try {
-    const already = await invoke("in_start_menu");
-    if (!already && navigator.userAgent.includes("Windows")) $("pin").hidden = false;
+    if (!(await invoke("in_start_menu")) && navigator.userAgent.includes("Windows")) $("pin").hidden = false;
   } catch (_) {}
 })();
 $("pin").onclick = async () => {
-  try {
-    const p = await invoke("add_to_start_menu");
-    $("pin").hidden = true;
-    say("Added to the Start Menu", "ok");
-    console.log("shortcut:", p);
-  } catch (e) { say(e, "err"); }
+  try { await invoke("add_to_start_menu"); $("pin").hidden = true; say(t("addedStart"), "ok"); }
+  catch (e) { say(e, "err"); }
 };
-
-refresh();
-setInterval(() => { if (!busy && !$("backdrop").classList.contains("open")) refresh(); }, 5000);
+setInterval(() => { if (!busy && !document.querySelector(".backdrop.open") && !openMenu) refresh(); }, 5000);
 </script>
 </body>
 </html>

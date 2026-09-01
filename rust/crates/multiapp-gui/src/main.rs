@@ -201,6 +201,97 @@ fn add_to_start_menu() -> Result<String, String> {
     }
 }
 
+
+#[tauri::command]
+fn clone_profile(app: String, from: String, to: String) -> Result<(), String> {
+    profile::clone_profile(&app, &from, &to).map(|_| ()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn rename_profile(app: String, old: String, new: String) -> Result<(), String> {
+    profile::rename(&app, &old, &new).map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Remove a profile. It is MOVED to Multiapp's Trash, never deleted, and the caller is told where it
+/// went so the UI can say so — a profile holds real logins and a misclick has to be recoverable.
+#[tauri::command]
+fn delete_profile(app: String, name: String, stamp: String) -> Result<String, String> {
+    profile::delete_to_trash(&app, &name, &stamp)
+        .map(|p| p.display().to_string())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn profile_size(app: String, name: String) -> Result<u64, String> {
+    profile::size_bytes(&app, &name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn reveal_profile(app: String, name: String) -> Result<(), String> {
+    profile::reveal(&app, &name).map_err(|e| e.to_string())
+}
+
+/// The macOS bash tool, if it is installed.
+///
+/// Backup, restore, export/import and session transfer live in that 1600-line script and are built
+/// on macOS specifics — Keychain reasoning, `.app` bundles, `~/Library` layouts. They are not ported
+/// to Rust and therefore do not exist on Windows, so the UI asks for this before offering them
+/// rather than showing buttons that cannot work.
+#[cfg(target_os = "macos")]
+fn find_bash_cli() -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    let candidates = [
+        PathBuf::from(&home).join(".local/bin/multiapp"),
+        PathBuf::from("/usr/local/bin/multiapp"),
+        PathBuf::from("/opt/homebrew/bin/multiapp"),
+    ];
+    candidates.into_iter().find(|p| p.exists())
+}
+
+#[tauri::command]
+fn advanced_available() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        find_bash_cli().is_some()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+/// Run one of the macOS-only commands and hand back its output verbatim.
+#[tauri::command]
+fn run_advanced(args: Vec<String>) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        // An allowlist, not a passthrough: this takes arguments from a web view, and a UI bug must
+        // not be able to turn into "run whatever you like".
+        const ALLOWED: &[&str] = &[
+            "migrate-list", "backup", "restore", "session-check", "session-backup",
+            "session-restore", "app-export", "app-import", "list-installed", "sessions",
+            "transfer", "export", "import", "scan", "probe", "apps", "doctor",
+        ];
+        let first = args.first().map(|s| s.as_str()).unwrap_or("");
+        if !ALLOWED.contains(&first) {
+            return Err(format!("'{first}' is not an allowed command"));
+        }
+        let cli = find_bash_cli().ok_or("the multiapp CLI is not installed")?;
+        let out = std::process::Command::new(&cli)
+            .args(&args)
+            .output()
+            .map_err(|e| e.to_string())?;
+        let mut text = String::from_utf8_lossy(&out.stdout).to_string();
+        text.push_str(&String::from_utf8_lossy(&out.stderr));
+        Ok(text)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = args;
+        Err("these commands are macOS-only for now".into())
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -213,6 +304,13 @@ fn main() {
             app_exists,
             in_start_menu,
             add_to_start_menu,
+            clone_profile,
+            rename_profile,
+            delete_profile,
+            profile_size,
+            reveal_profile,
+            advanced_available,
+            run_advanced,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the Multiapp window");
