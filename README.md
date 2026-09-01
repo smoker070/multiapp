@@ -8,7 +8,7 @@
 <p align="center">
   <img alt="platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-informational">
   <img alt="macos" src="https://img.shields.io/badge/macOS-verified-success">
-  <img alt="windows" src="https://img.shields.io/badge/Windows-CI%20verified-success">
+  <img alt="windows" src="https://img.shields.io/badge/Windows-launch%20verified%20%C2%B7%20stop%20unproven-yellow">
   <img alt="linux" src="https://img.shields.io/badge/Linux-CI%20verified-success">
   <img alt="rust" src="https://img.shields.io/badge/Rust-2021-b7410e">
   <img alt="tests" src="https://img.shields.io/badge/rust%20tests-9%20passing-success">
@@ -245,10 +245,30 @@ That hang also produced a product fix: `launch()` no longer waits on `open` inde
 after 30 seconds and reports a stuck LaunchServices, which a user with a wedged window server would
 have wanted too.
 
-Two limits worth being blunt about. First, what CI verifies is the **Rust** CLI — the bash tool with
-its 27 commands is macOS-only in practice and has no automated suite. Second, `multiapp.ps1` is a
-separate implementation that still has never been executed on Windows; `scripts/test-windows.ps1`
-exists to change that, and [`WINDOWS.md`](WINDOWS.md) lists what is unproven.
+**Tested on a real Windows machine, not only CI.** A Windows 11 VM ran the shipped `multiapp.exe`
+and confirmed: the profile directory is written, the profile is reported as running, and a
+prefix-named sibling (`work` vs `work2`) is correctly reported as stopped. Two bugs came out of it
+that CI could not have found, both in `launch`:
+
+- the child inherited multiapp's stdio, so the browser held its launcher's handles — over SSH that
+  hung the connection for ten minutes;
+- nulling the stdio was not enough, because on Windows a child stays attached to its parent's
+  **console** and a shell waits on that console's process tree. `DETACHED_PROCESS` fixed it.
+
+**One thing remains genuinely unresolved: graceful `stop` on an interactive Windows desktop.**
+`taskkill` without `/F` posts `WM_CLOSE` to a process's top-level windows. A browser launched over
+SSH has none — an SSH session runs in a separate window station — so stop cannot work there, and
+`MainWindowHandle` read over SSH always reads 0 even when a window exists, which makes the condition
+unmeasurable remotely too. The CI job's stop assertion passes, but for the same reason it is not
+evidence about a normal desktop. Running `scripts/test-windows.ps1` from a real desktop session is
+what will settle it; until then, treat Windows `stop` as unverified. multiapp never force-kills, so
+the failure mode is a message telling you to quit the app yourself — not lost data.
+
+Two further limits. What CI verifies is the **Rust** CLI — the bash tool with its 27 commands is
+macOS-only in practice and has no automated suite. And `multiapp.ps1` is a separate implementation
+that **does not parse under PowerShell**: its first execution ever, on that same VM, failed at
+`multiapp.ps1:186` with "The '<' operator is reserved for future use". It has never worked, and the
+README should not have implied otherwise.
 
 ---
 

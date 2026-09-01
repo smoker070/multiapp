@@ -1,8 +1,11 @@
 # Multiapp on Windows
 
-> **Never run on real Windows.** `multiapp.ps1` was written on a Mac and has not been executed, or
-> even parsed, by a real PowerShell. Everything here is an expectation, not a result. If you are
-> reading this, you are the first tester.
+> **It has now been run, and it does not work.** On 2026-09-01 `multiapp.ps1` was executed on a real
+> Windows 11 machine for the first time. It does not even parse: PowerShell fails at line 186 with
+> *"The '<' operator is reserved for future use"* on `Die "usage: multiapp rename <app> <old> <new>"`,
+> and reports further errors after it. **No command in this file has ever run.** Use the Rust
+> `multiapp.exe` instead — that one is tested. The rest of this document describes what was intended,
+> not what works.
 
 ## There is no build step
 
