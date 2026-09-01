@@ -91,12 +91,45 @@ fn run() -> Result<i32, Error> {
     }
 }
 
+/// Was this started by double-clicking it in Explorer, rather than from a shell?
+///
+/// Windows gives a double-clicked console program a console all to itself and destroys that console
+/// the moment the program exits — so the window flashes and vanishes before anything can be read.
+/// `GetConsoleProcessList` reports how many processes are attached to our console: exactly one means
+/// nobody is waiting for us, which is Explorer. Started from PowerShell or cmd, the shell is attached
+/// too and the count is higher, so nothing changes for scripted use.
+#[cfg(windows)]
+fn launched_from_explorer() -> bool {
+    // declared directly rather than pulling in a winapi crate for one call
+    extern "system" {
+        fn GetConsoleProcessList(lpdw_process_list: *mut u32, dw_process_count: u32) -> u32;
+    }
+    let mut pids = [0u32; 4];
+    let n = unsafe { GetConsoleProcessList(pids.as_mut_ptr(), pids.len() as u32) };
+    n == 1
+}
+
+#[cfg(not(windows))]
+fn launched_from_explorer() -> bool {
+    false // every other platform keeps the terminal it was started from
+}
+
 fn main() {
-    match run() {
-        Ok(code) => std::process::exit(code),
+    let code = match run() {
+        Ok(code) => code,
         Err(e) => {
             eprintln!("multiapp: {e}");
-            std::process::exit(1);
+            1
         }
+    };
+    if launched_from_explorer() {
+        println!("\nmultiapp is a command-line tool — run it from PowerShell with a command,");
+        println!("for example:  multiapp list");
+        print!("\nPress Enter to close…");
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        let mut _s = String::new();
+        let _ = std::io::stdin().read_line(&mut _s);
     }
+    std::process::exit(code);
 }
