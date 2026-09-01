@@ -99,7 +99,20 @@ pub fn launch(app: &Path, data_dir: &Path, extra: &[String]) -> Result<(), Error
         }
     } else {
         // Windows and Linux have no one-instance-per-app rule to defeat: running it again is enough.
-        Command::new(app).arg(&flag).args(extra).spawn().map_err(Error::Io)?;
+        //
+        // The child's stdio MUST be detached. Inheriting it ties the browser to whatever started
+        // multiapp: launched over SSH, Edge held the connection's pipe open and ssh never returned —
+        // a ten-minute hang that looked like a test-harness problem and was not. The same applies to
+        // any terminal, script or CI step: the shell would appear to freeze until the browser quits.
+        // macOS avoids this only because `open -n` hands the launch to LaunchServices.
+        Command::new(app)
+            .arg(&flag)
+            .args(extra)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(Error::Io)?;
     }
     let _ = paths::root();
     Ok(())
