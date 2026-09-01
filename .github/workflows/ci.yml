@@ -124,10 +124,12 @@ jobs:
       - name: Install the Tauri bundler
         run: cargo install tauri-cli --version "^2" --locked
 
+      # Bundling is `cargo tauri build`'s default; --no-bundle is a boolean that TURNS IT OFF.
+      # No continue-on-error here: the previous attempt failed on a bad flag and the job still went
+      # green, shipping an artifact with no installer in it.
       - name: Bundle installer
         working-directory: rust/crates/multiapp-gui
-        run: cargo tauri build --no-bundle=false
-        continue-on-error: true
+        run: cargo tauri build
 
       - name: Stage
         shell: bash
