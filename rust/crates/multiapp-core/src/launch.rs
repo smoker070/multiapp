@@ -105,14 +105,26 @@ pub fn launch(app: &Path, data_dir: &Path, extra: &[String]) -> Result<(), Error
         // a ten-minute hang that looked like a test-harness problem and was not. The same applies to
         // any terminal, script or CI step: the shell would appear to freeze until the browser quits.
         // macOS avoids this only because `open -n` hands the launch to LaunchServices.
-        Command::new(app)
-            .arg(&flag)
+        let mut cmd = Command::new(app);
+        cmd.arg(&flag)
             .args(extra)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(Error::Io)?;
+            .stderr(std::process::Stdio::null());
+        // Nulling stdio is NOT sufficient on Windows. A child stays attached to its parent's
+        // CONSOLE, and a shell waits on that console's process tree no matter where the handles
+        // point — verified on a real Windows VM, where PowerShell blocked for over ten minutes on a
+        // browser whose stdio was already NUL. DETACHED_PROCESS gives the browser no console at all,
+        // which is what a GUI app wants anyway; CREATE_NEW_PROCESS_GROUP stops a Ctrl-C in the
+        // launching shell from reaching it.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const DETACHED_PROCESS: u32 = 0x0000_0008;
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+            cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        }
+        cmd.spawn().map_err(Error::Io)?;
     }
     let _ = paths::root();
     Ok(())
