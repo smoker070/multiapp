@@ -6,7 +6,9 @@ app/dist/
 .DS_Store
 .AppleDouble
 .LSOverride
-Icon?
+# NOTE: the usual `Icon?` line is deliberately NOT used. It matches any five-character name
+# beginning with "Icon" — including a directory called `icons`, which silently excluded every
+# application icon and would have failed the Windows build on a missing icon.ico.
 
 # editors
 .vscode/
@@ -31,3 +33,9 @@ migrate-cache
 # Rust build output (gigabytes — never commit)
 rust/target/
 **/*.rs.bk
+
+# GUI preview scratch (lives outside the repo, but never commit a copy)
+uipreview/
+
+# Tauri build output — regenerated on every build
+rust/crates/multiapp-gui/gen/

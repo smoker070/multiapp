@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/multiapp-core", "crates/multiapp-cli"]
+members = ["crates/multiapp-core", "crates/multiapp-cli", "crates/multiapp-gui"]
 
 [workspace.package]
 version = "0.3.0"
