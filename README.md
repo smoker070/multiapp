@@ -11,7 +11,8 @@
   <img alt="windows" src="https://img.shields.io/badge/Windows-launch%20verified%20%C2%B7%20stop%20unproven-yellow">
   <img alt="linux" src="https://img.shields.io/badge/Linux-CI%20verified-success">
   <img alt="rust" src="https://img.shields.io/badge/Rust-2021-b7410e">
-  <img alt="tests" src="https://img.shields.io/badge/rust%20tests-9%20passing-success">
+  <img alt="ui" src="https://img.shields.io/badge/desktop%20UI-Tauri%202-24c8db">
+  <img alt="tests" src="https://img.shields.io/badge/rust%20tests-19%20passing-success">
   <img alt="licence" src="https://img.shields.io/badge/licence-MIT-blue">
 </p>
 
@@ -132,13 +133,15 @@ by any flag, and Multiapp reports those as unsupported rather than failing quiet
 | **Login sessions** | Save and restore just the login — kilobytes, not gigabytes — for any installed app, including ones that cannot be profiled at all |
 | **Session reporting** | `session-check` shows what session data an app holds, which **sites** its cookies belong to, and whether any of it would survive a move to another Mac |
 | **Claude Code sessions** | Copy chosen sessions between profiles as a true copy — new session ids and a duplicated transcript — because transcripts live outside the profile and sharing one is a live-session collision |
-| **Portable core** | A Rust `multiapp-core` + `multiapp-cli` with `new · launch · list · stop · where`, one codebase for all three platforms |
+| **Desktop UI** | A Tauri window on macOS and Windows over the same core: profile list with live state, launch/stop, clone/rename/delete, backup and restore, cookie-site reports, app probing, and settings with three languages (English, O'zbek, Russian) and a dark/light/system theme |
+| **Portable core** | `multiapp-core` carries profiles, process matching, app-data discovery and the archive format; `multiapp-cli` exposes `new · launch · list · stop · where`. One codebase for all three platforms |
 | **Safety** | Type-to-confirm deletes, staged Trash instead of `rm`, a containment guard that refuses any path outside Multiapp's own root, and graceful quit that never force-kills |
 
-### Designed and scheduled
+### Not built yet
 
-A Tauri desktop GUI on the Rust core · the remaining commands ported to Rust · signed and notarised
-macOS builds · a Windows installer · backup and session support on Windows.
+Claude Code session transfer and app export/import are still macOS-only, in the shell tool. Signed
+and notarised macOS builds need a paid Apple Developer ID. The macOS `.app` bundle is ad-hoc signed
+and the Windows installer is unsigned, so both warn on first run.
 
 ---
 
@@ -151,9 +154,9 @@ macOS builds · a Windows installer · backup and session support on Windows.
 └───────────────────────────────┬──────────────────────────────┘
                                 │ never touches profiles directly
 ┌───────────────────────────────▼──────────────────────────────┐
-│  multiapp  (bash)      27 commands — profiles, backup,        │
-│  multiapp.ps1          sessions, export/import, discovery     │
-│  rust/  (portable)     new · launch · list · stop · where     │
+│  multiapp  (bash)      27 commands — macOS only              │
+│  rust/multiapp-gui     the desktop window (Tauri 2)          │
+│  rust/multiapp-cli     new · launch · list · stop · where    │
 └───────────────┬──────────────────────────────┬───────────────┘
 ┌───────────────▼──────────────┐ ┌─────────────▼───────────────┐
 │  the launch lever            │ │  the data layer              │

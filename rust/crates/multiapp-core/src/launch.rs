@@ -129,3 +129,64 @@ pub fn launch(app: &Path, data_dir: &Path, extra: &[String]) -> Result<(), Error
     let _ = paths::root();
     Ok(())
 }
+
+/// What a probe found out.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Probe {
+    /// Did the app write into the directory it was told to use?
+    pub honored: bool,
+    pub files: usize,
+    /// Was the launched instance still running when the probe finished?
+    pub was_running: bool,
+    pub stopped: bool,
+}
+
+/// Launch an app into a throwaway directory and find out whether it honours `--user-data-dir=`.
+///
+/// This is the only way to answer the question for an app nobody has tested: some apps override
+/// their data directory in their own code, and the flag is then simply ignored — HDRezka-Client does
+/// exactly that. A verdict has to be earned, and this is how it is earned.
+///
+/// The probe cleans up after itself: it asks the instance it started to quit, and removes the
+/// throwaway directory. It never force-kills.
+pub fn probe(app_ref: &str, seconds: u64) -> Result<Probe, Error> {
+    let app = resolve_app(app_ref)?;
+    let dir = std::env::temp_dir().join(format!(
+        "multiapp-probe-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&dir)?;
+
+    let extra: Vec<String> = if cfg!(target_os = "macos") {
+        vec![]
+    } else {
+        // a probe should not trip over a first-run wizard or a default-browser prompt
+        vec!["--no-first-run".into(), "--no-default-browser-check".into()]
+    };
+    launch(&app, &dir, &extra)?;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    let mut files = 0usize;
+    while std::time::Instant::now() < deadline {
+        files = std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0);
+        if files > 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(400));
+    }
+
+    let sweep = crate::proc::sweep(&dir);
+    let was_running = sweep.is_running();
+    let stopped = crate::proc::quit_and_wait(&dir, std::time::Duration::from_secs(15))
+        .unwrap_or(false);
+    // only remove the directory once nothing is using it; leaving it is better than yanking files
+    // out from under a process that is still writing
+    if stopped {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    Ok(Probe { honored: files > 0, files, was_running, stopped })
+}

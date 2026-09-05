@@ -11,3 +11,4 @@ thiserror.workspace = true
 directories.workspace = true
 sysinfo.workspace = true
 zip.workspace = true
+rusqlite.workspace = true

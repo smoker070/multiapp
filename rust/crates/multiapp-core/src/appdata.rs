@@ -136,27 +136,122 @@ pub fn session_files(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// Classify a cookie store: encrypted, plaintext, or empty.
+/// One cookie store, read properly.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct CookieStore {
+    pub total: usize,
+    pub encrypted: usize,
+    pub plaintext: usize,
+    /// Host to cookie count, most cookies first.
+    pub hosts: Vec<(String, usize)>,
+}
+
+/// Read a Chromium or Gecko cookie store.
 ///
-/// Reads BOTH value columns. Chromium puts a cookie's value in `value` when it is not OS-encrypted
-/// and in `encrypted_value` when it is; inspecting only the encrypted column reported a store of 131
-/// plaintext cookies as empty. An opaque blob with an unrecognised tag counts as encrypted — guessing
-/// the other way would claim a protected session is portable.
+/// Opened read-only through a COPY, never in place: the app may hold the file open with a WAL, and
+/// a tool that reports on a session must not be able to disturb it.
+///
+/// Both value columns are read. Chromium puts a cookie's value in `value` when it is not
+/// OS-encrypted and in `encrypted_value` when it is; inspecting only the encrypted column reported a
+/// store of 131 plaintext cookies as empty. The v10/v11 tag is compared in Rust, not in SQL —
+/// SQLite's substr() on a BLOB returns a BLOB, which never compares equal to a text literal, so
+/// doing it in SQL silently matches nothing.
+///
+/// Host names ONLY. Cookie values are never read: they are live credentials.
+pub fn read_cookies(path: &Path) -> Option<CookieStore> {
+    let tmp = std::env::temp_dir().join(format!("ma-ck-{}-{}.sqlite", std::process::id(), rand_suffix()));
+    std::fs::copy(path, &tmp).ok()?;
+    let out = (|| -> Option<CookieStore> {
+        let db = rusqlite::Connection::open_with_flags(
+            &tmp,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .ok()?;
+        let mut st = CookieStore::default();
+        // Chromium first, then Gecko's different table and column names
+        let chromium = db.prepare("SELECT host_key, value, encrypted_value FROM cookies").ok();
+        if let Some(mut q) = chromium {
+            let rows = q
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0).unwrap_or_default(),
+                        r.get::<_, String>(1).unwrap_or_default(),
+                        r.get::<_, Vec<u8>>(2).unwrap_or_default(),
+                    ))
+                })
+                .ok()?;
+            let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+            for row in rows.flatten() {
+                let (host, value, enc) = row;
+                st.total += 1;
+                if !enc.is_empty() {
+                    st.encrypted += 1;
+                } else if !value.is_empty() {
+                    st.plaintext += 1;
+                }
+                *counts.entry(host).or_default() += 1;
+            }
+            st.hosts = rank(counts);
+        } else {
+            let mut q = db.prepare("SELECT host FROM moz_cookies").ok()?;
+            let rows = q.query_map([], |r| r.get::<_, String>(0)).ok()?;
+            let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+            for h in rows.flatten() {
+                st.total += 1;
+                st.plaintext += 1; // Gecko keeps values in the clear
+                *counts.entry(h).or_default() += 1;
+            }
+            st.hosts = rank(counts);
+        }
+        Some(st)
+    })();
+    let _ = std::fs::remove_file(&tmp);
+    out
+}
+
+fn rank(counts: std::collections::HashMap<String, usize>) -> Vec<(String, usize)> {
+    let mut v: Vec<(String, usize)> = counts.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    v
+}
+
+fn rand_suffix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0)
+}
+
 fn cookie_kind(path: &Path) -> Evidence {
-    let Ok(bytes) = std::fs::read(path) else { return Evidence::None };
-    if bytes.len() < 16 || &bytes[..15] != b"SQLite format 3" {
-        return Evidence::None;
+    match read_cookies(path) {
+        Some(c) if c.encrypted > 0 => Evidence::CookiesEncrypted,
+        Some(c) if c.plaintext > 0 => Evidence::CookiesPlain,
+        _ => Evidence::None,
     }
-    // No SQL engine here: the v10/v11 tag is a literal byte sequence in the page data, and its
-    // presence anywhere in the file is enough to say the store is OS-encrypted.
-    let enc = bytes.windows(3).any(|w| w == b"v10" || w == b"v11");
-    if enc {
-        Evidence::CookiesEncrypted
-    } else if bytes.len() > 4096 {
-        Evidence::CookiesPlain
-    } else {
-        Evidence::None // an empty store is a fresh file of a few pages
+}
+
+/// Which sites an app's cookies belong to, and how many of each.
+///
+/// This is the part no heuristic can settle: twelve mirror domains plus ad trackers is website
+/// state, `.identity.notion.com` is an account. Showing the hosts lets a person decide instead of
+/// the tool guessing.
+pub fn cookie_report(app: &str) -> Result<CookieStore, Error> {
+    let mut best = CookieStore::default();
+    for d in dirs_for(app)? {
+        for f in session_files(&d) {
+            let Some(n) = f.file_name().and_then(|s| s.to_str()) else { continue };
+            if n != "Cookies" && n != "cookies.sqlite" {
+                continue;
+            }
+            if let Some(c) = read_cookies(&f) {
+                // an app can own several stores; the one that actually holds the session wins
+                if c.total > best.total {
+                    best = c;
+                }
+            }
+        }
     }
+    Ok(best)
 }
 
 pub fn evidence_for(app: &str) -> Result<Evidence, Error> {

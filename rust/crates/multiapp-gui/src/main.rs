@@ -366,6 +366,22 @@ fn human(b: u64) -> String {
     if i == 0 { format!("{b} B") } else { format!("{v:.1} {}", U[i]) }
 }
 
+
+/// Which sites an app's cookies belong to. Host names only — cookie values are never read.
+#[tauri::command]
+fn cookie_report(app: String) -> Result<serde_json::Value, String> {
+    let c = appdata::cookie_report(&app).map_err(|e| e.to_string())?;
+    serde_json::to_value(c).map_err(|e| e.to_string())
+}
+
+/// Launch an app into a throwaway directory to find out whether it honours the flag at all.
+/// Some apps override their data directory in their own code and simply ignore it.
+#[tauri::command]
+fn probe_app(app: String) -> Result<serde_json::Value, String> {
+    let p = launch::probe(&app, 20).map_err(|e| e.to_string())?;
+    serde_json::to_value(p).map_err(|e| e.to_string())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -390,6 +406,8 @@ fn main() {
             backup_app,
             archive_info,
             restore_archive,
+            cookie_report,
+            probe_app,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the Multiapp window");
