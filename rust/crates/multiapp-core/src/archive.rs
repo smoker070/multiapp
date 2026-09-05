@@ -206,18 +206,25 @@ pub fn restore(zip_path: &Path, stamp: &str) -> Result<Summary, Error> {
 mod tests {
     use super::*;
 
-    /// These tests move HOME, so they take the same process-wide lock as everything else that does.
+    /// Work inside a scratch directory under the REAL home, rather than relocating home.
+    ///
+    /// Relocating it via $HOME works on macOS and Linux and does nothing on Windows: `directories`
+    /// resolves the Windows home through a Win32 known-folder call, so no environment variable can
+    /// move it. The first version of these tests therefore archived zero files on Windows — every
+    /// path failed `strip_prefix(home)` — and passed everywhere else, which is exactly the shape of
+    /// failure CI exists to catch.
     fn with_home<T>(f: impl FnOnce(&Path) -> T) -> T {
         let _g = paths::env_guard();
-        let base = std::env::temp_dir().join(format!("ma-arch-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let real_home = super::home().expect("home");
+        let base = real_home.join(format!(
+            ".multiapp-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
-        let real = base.canonicalize().unwrap();
-        let old = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &real);
-        std::env::set_var("MULTIAPP_HOME", real.join("ma-root"));
-        let out = f(&real);
-        if let Some(h) = old { std::env::set_var("HOME", h); }
+        std::env::set_var("MULTIAPP_HOME", base.join("ma-root"));
+        let out = f(&base);
         let _ = std::fs::remove_dir_all(&base);
         out
     }
@@ -278,7 +285,9 @@ mod tests {
             write(&dir.join("Cookies"), "replaced-by-user");
             let r = restore(&zipf, "t").unwrap();
             let staged = r.staged.expect("overwriting must stage the old file");
-            let kept = std::fs::read_to_string(staged.join("AppZ").join("Cookies")).unwrap();
+            // staging mirrors the path RELATIVE TO HOME, which now includes the scratch directory
+            let rel = dir.join("Cookies").strip_prefix(super::home().unwrap()).unwrap().to_path_buf();
+            let kept = std::fs::read_to_string(staged.join(rel)).unwrap();
             assert_eq!(kept, "replaced-by-user", "the version that was overwritten must be recoverable");
         })
     }
