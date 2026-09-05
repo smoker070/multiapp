@@ -5,7 +5,7 @@
 // prompted this program: "when I open it, it works like a terminal — that is unprofessional".
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use multiapp_core::{launch, paths, profile};
+use multiapp_core::{appdata, archive, launch, paths, profile};
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -292,8 +292,83 @@ fn run_advanced(args: Vec<String>) -> Result<String, String> {
     }
 }
 
+
+#[derive(Serialize)]
+struct AppDataDto {
+    name: String,
+    bytes: u64,
+    evidence: String,
+    dirs: usize,
+}
+
+/// Applications on this machine that hold a session worth keeping.
+#[tauri::command]
+fn list_app_data() -> Result<Vec<AppDataDto>, String> {
+    Ok(appdata::installed()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|a| AppDataDto {
+            name: a.name,
+            bytes: a.bytes,
+            evidence: a.evidence.label().to_string(),
+            dirs: a.dirs.len(),
+        })
+        .collect())
+}
+
+fn now_stamp() -> String {
+    // no chrono for one string: seconds since the epoch is unique per archive and sorts correctly
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("{secs}")
+}
+
+/// Archive an app's data, or just the files that carry its login.
+#[tauri::command]
+fn backup_app(app: String, out: String, sessions_only: bool) -> Result<String, String> {
+    let dirs = appdata::dirs_for(&app).map_err(|e| e.to_string())?;
+    if dirs.is_empty() {
+        return Err(format!("no local data found for '{app}'"));
+    }
+    let s = archive::create(&app, &dirs, std::path::Path::new(&out), sessions_only, false, &now_stamp())
+        .map_err(|e| e.to_string())?;
+    Ok(format!("{} file(s), {} — {}", s.files, human(s.bytes), s.path.display()))
+}
+
+/// What is inside an archive, before anything is written.
+#[tauri::command]
+fn archive_info(path: String) -> Result<serde_json::Value, String> {
+    let m = archive::read_manifest(std::path::Path::new(&path)).map_err(|e| e.to_string())?;
+    serde_json::to_value(m).map_err(|e| e.to_string())
+}
+
+/// Put an archive back. Merges into what is there; anything overwritten is staged to Trash first.
+#[tauri::command]
+fn restore_archive(path: String) -> Result<String, String> {
+    let s = archive::restore(std::path::Path::new(&path), &now_stamp()).map_err(|e| e.to_string())?;
+    let mut msg = format!("{} file(s), {} restored", s.files, human(s.bytes));
+    if let Some(t) = s.staged {
+        msg.push_str(&format!(" — replaced files kept in {}", t.display()));
+    }
+    Ok(msg)
+}
+
+fn human(b: u64) -> String {
+    const U: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = b as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < U.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 { format!("{b} B") } else { format!("{v:.1} {}", U[i]) }
+}
+
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             list_profiles,
             create_profile,
@@ -311,6 +386,10 @@ fn main() {
             reveal_profile,
             advanced_available,
             run_advanced,
+            list_app_data,
+            backup_app,
+            archive_info,
+            restore_archive,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the Multiapp window");

@@ -166,6 +166,16 @@
   .adv .grid { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
   .adv .grid .btn { padding:8px 6px; font-size:12px; font-weight:600; }
   .note { font-size:11px; color:var(--muted); line-height:1.5; margin-top:9px; }
+  .arow {
+    display:flex; align-items:center; gap:9px; padding:9px 10px; margin-bottom:7px;
+    background:var(--panel-2); border:1px solid var(--line); border-radius:10px;
+    animation:rise .22s var(--ease) both; transition:border-color .16s;
+  }
+  .arow:hover { border-color:var(--panel-3); }
+  .arow .n { flex:1; min-width:0; }
+  .arow .n b { display:block; font-size:12.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .arow .n span { color:var(--muted); font-size:11px; }
+  .arow .btn { padding:5px 9px; font-size:11px; }
   pre {
     background:var(--panel-2); border:1px solid var(--line); border-radius:9px; padding:10px;
     font-size:11px; max-height:230px; overflow:auto; white-space:pre-wrap; word-break:break-word;
@@ -183,7 +193,7 @@
 
   <div class="toolbar">
     <button class="btn primary" id="new" data-i18n="newProfile">New Profile</button>
-    <button class="btn ghost" id="advBtn" data-i18n="tools" hidden>Tools</button>
+    <button class="btn ghost" id="advBtn" data-i18n="tools">Tools</button>
   </div>
 
   <main id="list"></main>
@@ -246,19 +256,15 @@
   </div>
 
   <div class="backdrop" id="bdTools">
-    <div class="modal">
-      <h2 data-i18n="tools">Tools</h2>
-      <div class="adv">
-        <h3 data-i18n="appData">App data &amp; logins</h3>
-        <div class="grid">
-          <button class="btn ghost" data-cmd="migrate-list"  data-i18n="whatCanBackup">What can be backed up</button>
-          <button class="btn ghost" data-cmd="list-installed" data-i18n="installedApps">Installed apps</button>
-          <button class="btn ghost" data-cmd="sessions"      data-i18n="claudeSessions">Claude sessions</button>
-          <button class="btn ghost" data-cmd="apps"          data-i18n="compat">Compatibility</button>
-        </div>
-        <div class="note" data-i18n="toolsNote"></div>
+    <div class="modal" style="max-width:400px">
+      <h2 data-i18n="backupRestore">Backup &amp; Restore</h2>
+      <div class="note" data-i18n="backupNote"></div>
+      <div class="actions" style="margin-top:12px">
+        <button class="btn ghost" id="bRestore" data-i18n="restoreFrom">Restore from file…</button>
+        <button class="btn ghost" id="bRescan" data-i18n="rescan">Rescan</button>
       </div>
-      <pre id="toolsOut" hidden></pre>
+      <div id="appList" style="margin-top:12px"></div>
+      <div class="hint" id="bStatus"></div>
       <div class="actions"><button class="btn ghost" id="tClose" data-i18n="close">Close</button></div>
     </div>
   </div>
@@ -286,7 +292,13 @@ const T = {
         whatCanBackup:"What can be backed up", installedApps:"Installed apps",
         claudeSessions:"Claude sessions", compat:"Compatibility",
         toolsNote:"Backup, restore, export and session transfer are macOS-only for now: they are built on the Keychain and on macOS app layouts, and the Windows equivalents have not been researched yet.",
-        toolsMissing:"Install the command-line tool to enable these (run ./multiapp install-stub once)." },
+        toolsMissing:"Install the command-line tool to enable these (run ./multiapp install-stub once).",
+        backupRestore:"Backup & Restore", backupNote:"Archive an app's local data, or just the files that carry its login. A restore MERGES — it never deletes anything the archive did not contain, and whatever it replaces is kept in Multiapp's Trash.",
+        restoreFrom:"Restore from file…", rescan:"Rescan", full:"Full", loginOnly:"Login only",
+        scanning:"Scanning applications…", noApps:"No applications with a saved session were found.",
+        saveAs:"Save backup as", chooseArchive:"Choose a Multiapp archive", backingUp:"Backing up",
+        restoring:"Restoring…", done:"Done", archiveHolds:"This archive holds",
+        credentialWarning:"An archive can contain a live login. Treat it like a password." },
   uz: { newProfile:"Yangi profil", tools:"Vositalar", settings:"Sozlamalar", theme:"Mavzu", dark:"Qorong‘i",
         light:"Yorug‘", system:"Tizim", language:"Til", storage:"Profillar joyi", close:"Yopish",
         application:"Ilova", profileName:"Profil nomi", cancel:"Bekor qilish", create:"Yaratish",
@@ -303,7 +315,13 @@ const T = {
         whatCanBackup:"Nimani saqlash mumkin", installedApps:"O‘rnatilgan ilovalar",
         claudeSessions:"Claude sessiyalari", compat:"Moslik",
         toolsNote:"Zaxiralash, tiklash, eksport va sessiya ko‘chirish hozircha faqat macOS uchun: ular Keychain va macOS ilova tuzilishiga asoslangan, Windows uchun ekvivalenti hali o‘rganilmagan.",
-        toolsMissing:"Bularni yoqish uchun buyruq qatori vositasini o‘rnating (bir marta ./multiapp install-stub)." },
+        toolsMissing:"Bularni yoqish uchun buyruq qatori vositasini o‘rnating (bir marta ./multiapp install-stub).",
+        backupRestore:"Zaxira va tiklash", backupNote:"Ilovaning mahalliy ma’lumotlarini yoki faqat login fayllarini saqlang. Tiklash QO‘SHADI — arxivda bo‘lmagan hech narsani o‘chirmaydi, almashtirilgani esa Multiapp savatida saqlanadi.",
+        restoreFrom:"Fayldan tiklash…", rescan:"Qayta skanerlash", full:"To‘liq", loginOnly:"Faqat login",
+        scanning:"Ilovalar skanerlanmoqda…", noApps:"Saqlangan sessiyasi bor ilova topilmadi.",
+        saveAs:"Zaxirani saqlash", chooseArchive:"Multiapp arxivini tanlang", backingUp:"Saqlanmoqda",
+        restoring:"Tiklanmoqda…", done:"Tayyor", archiveHolds:"Bu arxivda",
+        credentialWarning:"Arxivda tirik login bo‘lishi mumkin. Uni parol kabi saqlang." },
   ru: { newProfile:"Новый профиль", tools:"Инструменты", settings:"Настройки", theme:"Тема", dark:"Тёмная",
         light:"Светлая", system:"Системная", language:"Язык", storage:"Хранилище профилей", close:"Закрыть",
         application:"Приложение", profileName:"Имя профиля", cancel:"Отмена", create:"Создать",
@@ -320,7 +338,13 @@ const T = {
         whatCanBackup:"Что можно сохранить", installedApps:"Установленные приложения",
         claudeSessions:"Сессии Claude", compat:"Совместимость",
         toolsNote:"Резервное копирование, восстановление, экспорт и перенос сессий пока только для macOS: они построены на Keychain и структуре приложений macOS, а эквиваленты для Windows ещё не исследованы.",
-        toolsMissing:"Установите инструмент командной строки, чтобы включить это (один раз ./multiapp install-stub)." },
+        toolsMissing:"Установите инструмент командной строки, чтобы включить это (один раз ./multiapp install-stub).",
+        backupRestore:"Резервное копирование", backupNote:"Сохраните данные приложения или только файлы входа. Восстановление ДОБАВЛЯЕТ — оно не удаляет то, чего не было в архиве, а заменённое сохраняется в корзине Multiapp.",
+        restoreFrom:"Восстановить из файла…", rescan:"Пересканировать", full:"Полностью", loginOnly:"Только вход",
+        scanning:"Сканирование приложений…", noApps:"Приложений с сохранённой сессией не найдено.",
+        saveAs:"Сохранить резервную копию", chooseArchive:"Выберите архив Multiapp", backingUp:"Сохранение",
+        restoring:"Восстановление…", done:"Готово", archiveHolds:"В этом архиве",
+        credentialWarning:"Архив может содержать активный вход. Храните его как пароль." },
 };
 let lang = "en";
 const t = k => (T[lang] && T[lang][k]) || T.en[k] || k;
@@ -519,17 +543,68 @@ $("langSeg").onclick = e => {
   applyLang();
 };
 
-/* ---------------------------------------------------------------- tools */
-$("advBtn").onclick = () => { $("toolsOut").hidden = true; $("bdTools").classList.add("open"); };
+/* ---------------------------------------------------------------- backup & restore */
+const dialog = () => window.__TAURI__.dialog;
+const human = b => { const u=["B","KB","MB","GB","TB"]; let v=b,i=0; while(v>=1024&&i<u.length-1){v/=1024;i++;} return i?`${v.toFixed(1)} ${u[i]}`:`${b} B`; };
+let apps = [];
+
+async function loadApps() {
+  const box = $("appList");
+  box.innerHTML = `<div class="note">${esc(t("scanning"))}</div>`;
+  try {
+    apps = await invoke("list_app_data");
+  } catch (e) { box.innerHTML = `<div class="hint bad">${esc(String(e))}</div>`; return; }
+  if (!apps.length) { box.innerHTML = `<div class="note">${esc(t("noApps"))}</div>`; return; }
+  box.innerHTML = apps.map((a, i) => `<div class="arow" style="animation-delay:${Math.min(i,10)*18}ms">
+      <span class="n"><b>${esc(a.name)}</b><span>${esc(a.evidence)} · ${esc(human(a.bytes))}</span></span>
+      <button class="btn ghost" data-b="${i}" data-full="1">${esc(t("full"))}</button>
+      <button class="btn ghost" data-b="${i}" data-full="0">${esc(t("loginOnly"))}</button>
+    </div>`).join("");
+  box.querySelectorAll("[data-b]").forEach(btn => {
+    btn.onclick = () => doBackup(apps[+btn.dataset.b], btn.dataset.full === "1");
+  });
+}
+
+async function doBackup(a, full) {
+  const st = $("bStatus");
+  try {
+    const suffix = full ? "data" : "login";
+    const path = await dialog().save({
+      title: t("saveAs"),
+      defaultPath: `multiapp-${a.name.replace(/[^A-Za-z0-9._-]/g, "-")}-${suffix}.zip`,
+      filters: [{ name: "Multiapp archive", extensions: ["zip"] }],
+    });
+    if (!path) return;
+    st.textContent = `${t("backingUp")} ${a.name}…`; st.className = "hint";
+    const msg = await invoke("backup_app", { app: a.name, out: path, sessionsOnly: !full });
+    st.textContent = `${t("done")} — ${msg}`; st.className = "hint good";
+    say(t("credentialWarning"));
+  } catch (e) { st.textContent = String(e); st.className = "hint bad"; }
+}
+
+$("bRestore").onclick = async () => {
+  const st = $("bStatus");
+  try {
+    const path = await dialog().open({
+      title: t("chooseArchive"), multiple: false,
+      filters: [{ name: "Multiapp archive", extensions: ["zip"] }],
+    });
+    if (!path) return;
+    // show what is inside BEFORE writing anything
+    const m = await invoke("archive_info", { path });
+    const ok = await dialog().confirm(
+      `${t("archiveHolds")}: ${m.app} — ${m.kind}, ${m.paths.length} path(s), ${m.os}, ${m.created}`,
+      { title: t("restoreFrom"), kind: "warning" });
+    if (!ok) return;
+    st.textContent = t("restoring"); st.className = "hint";
+    st.textContent = await invoke("restore_archive", { path });
+    st.className = "hint good";
+  } catch (e) { st.textContent = String(e); st.className = "hint bad"; }
+};
+
+$("bRescan").onclick = loadApps;
+$("advBtn").onclick = () => { $("bStatus").textContent = ""; $("bdTools").classList.add("open"); loadApps(); };
 $("tClose").onclick = () => $("bdTools").classList.remove("open");
-$("bdTools").querySelectorAll("[data-cmd]").forEach(b => {
-  b.onclick = async () => {
-    const out = $("toolsOut");
-    out.hidden = false; out.textContent = "…";
-    try { out.textContent = (await invoke("run_advanced", { args: [b.dataset.cmd] })) || "(no output)"; }
-    catch (e) { out.textContent = String(e); }
-  };
-});
 
 document.querySelectorAll(".backdrop").forEach(bd => {
   bd.onclick = e => { if (e.target === bd) bd.classList.remove("open"); };
@@ -548,7 +623,7 @@ $("refresh").onclick = () => { $("refresh").classList.add("spin"); refresh().fin
 (async () => {
   loadPrefs(); applyLang();
   await refresh();
-  try { if (await invoke("advanced_available")) $("advBtn").hidden = false; } catch (_) {}
+  $("advBtn").hidden = false;
   try {
     if (!(await invoke("in_start_menu")) && navigator.userAgent.includes("Windows")) $("pin").hidden = false;
   } catch (_) {}

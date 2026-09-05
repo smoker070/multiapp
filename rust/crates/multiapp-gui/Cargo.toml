@@ -12,6 +12,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 multiapp-core = { path = "../multiapp-core" }
 tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-dialog = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 

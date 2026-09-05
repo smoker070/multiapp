@@ -3,6 +3,8 @@
 //! This exists because maintaining a second hand-written implementation per OS produced bugs that
 //! could not be tested away: a PowerShell port that swept the Windows credential vault into a backup
 //! archive, and a shell profile-matcher that reported stopped profiles as running.
+pub mod appdata;
+pub mod archive;
 pub mod error;
 pub mod launch;
 pub mod paths;

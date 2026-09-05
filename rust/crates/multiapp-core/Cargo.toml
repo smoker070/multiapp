@@ -10,3 +10,4 @@ serde_json.workspace = true
 thiserror.workspace = true
 directories.workspace = true
 sysinfo.workspace = true
+zip.workspace = true

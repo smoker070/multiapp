@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Only what the window actually needs: the core API, plus the two file dialogs used for choosing where a backup is written and which archive to restore.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "dialog:allow-save",
+    "dialog:allow-open",
+    "dialog:allow-confirm"
+  ]
+}

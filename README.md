@@ -71,7 +71,6 @@ Google Chrome      work                   stopped
 - [Repository layout](#repository-layout)
 - [Testing](#testing)
 - [Documentation](#documentation)
-- [Roadmap](#roadmap)
 - [Licence](#licence)
 
 ---
@@ -140,8 +139,6 @@ by any flag, and Multiapp reports those as unsupported rather than failing quiet
 
 A Tauri desktop GUI on the Rust core · the remaining commands ported to Rust · signed and notarised
 macOS builds · a Windows installer · backup and session support on Windows.
-
-See [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ---
 
@@ -370,21 +367,6 @@ The bash CLI has no automated suite; its verdicts come from the experiment logs 
 The experiments are the file to read first. They record what was measured, including the cases
 where a measurement contradicted the assumption and the design had to change — the `HOME` override
 that turned out to do nothing, and the session files whose deletion left an app still signed in.
-
-## Roadmap
-
-| Milestone | State |
-|---|---|
-| Verified isolation mechanism and macOS CLI | Complete |
-| macOS menu-bar app and DMG | Complete |
-| Backup, restore and login sessions | Complete |
-| Portable Rust core and CLI | Complete |
-| **CI green on Windows and Linux** | **Next** |
-| Remaining commands ported to Rust | Planned |
-| Tauri GUI on the shared core | Planned |
-| Signed and notarised macOS build, Windows installer | Planned |
-
----
 
 ## Licence
 

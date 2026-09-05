@@ -6,6 +6,8 @@ pub enum Error {
     NoHome,
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    #[error("archive: {0}")]
+    Zip(#[from] zip::result::ZipError),
     #[error("app not found: {0}")]
     AppNotFound(String),
     #[error("launch failed: {0}")]
