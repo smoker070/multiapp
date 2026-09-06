@@ -90,9 +90,14 @@
   .stop { background:transparent; color:var(--danger); border-color:var(--danger); }
   .stop:hover { background:var(--danger); color:#fff; }
 
-  .menu-wrap { position:relative; flex:none; }
+  /* The row menu lives at BODY level, not inside the row.
+     Inside the list it was both overlapped and clippable: `main` has overflow-y:auto, so a menu
+     extending past the row is cut off, and rows that animate in briefly form their own stacking
+     contexts, letting a LATER row paint over an earlier row's open menu. position:fixed on a
+     body-level element has neither problem, and it keeps working while the list scrolls. */
   .menu {
-    position:absolute; right:0; top:calc(100% + 6px); z-index:40; min-width:172px;
+    /* above the list, BELOW the dialog backdrop (60): a dialog must cover everything. */
+    position:fixed; z-index:50; min-width:176px;
     background:var(--panel-2); border:1px solid var(--line); border-radius:11px;
     box-shadow:var(--shadow); padding:5px; display:none;
     transform-origin:top right; animation:pop .16s var(--ease);
@@ -204,6 +209,14 @@
   </footer>
 
   <!-- New / rename / clone all reuse one dialog: same shape, different verb -->
+  <div class="menu" id="rowMenu">
+    <button data-act="reveal" data-i18n="openFolder">Open folder</button>
+    <button data-act="rename" data-i18n="rename">Rename</button>
+    <button data-act="clone"  data-i18n="clone">Clone</button>
+    <hr>
+    <button class="danger" data-act="delete" data-i18n="delete">Delete</button>
+  </div>
+
   <div class="backdrop" id="bdProfile">
     <div class="modal">
       <h2 id="pTitle">New Profile</h2>
@@ -397,8 +410,40 @@ function stamp() {
   const d = new Date(), p = n => String(n).padStart(2, "0");
   return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
-function closeMenus() { if (openMenu) { openMenu.classList.remove("open"); openMenu = null; } }
+function closeMenus() {
+  const m = $("rowMenu");
+  if (m) m.classList.remove("open");
+  openMenu = null;
+}
 document.addEventListener("click", closeMenus);
+// a fixed menu does not travel with the list, so close it rather than leave it stranded
+window.addEventListener("resize", closeMenus);
+document.addEventListener("scroll", closeMenus, true);
+
+/// Put the menu under the button that opened it, flipping above when there is no room below.
+function openRowMenu(btn, row) {
+  const m = $("rowMenu");
+  m.classList.add("open");
+  openMenu = row;
+  const b = btn.getBoundingClientRect();
+  const w = m.offsetWidth, h = m.offsetHeight;
+  let left = Math.min(b.right - w, window.innerWidth - w - 8);
+  left = Math.max(8, left);
+  const below = b.bottom + 6;
+  const top = (below + h > window.innerHeight - 8) ? Math.max(8, b.top - h - 6) : below;
+  m.style.left = `${left}px`;
+  m.style.top  = `${top}px`;
+  m.style.transformOrigin = (top < b.top) ? "bottom right" : "top right";
+}
+
+$("rowMenu").onclick = e => {
+  e.stopPropagation();
+  const b = e.target.closest("button[data-act]");
+  if (!b || !openMenu) return;
+  const target = openMenu;
+  closeMenus();
+  act(b.dataset.act, target, b);
+};
 
 /* ---------------------------------------------------------------- list */
 function render() {
@@ -419,16 +464,7 @@ function render() {
       <span class="dot ${cls}" title="${esc(state)}"></span>
       <span class="meta"><div class="app">${esc(p.app)}</div><div class="sub">${esc(p.name)} · ${esc(state)}</div></span>
       ${main}
-      <span class="menu-wrap">
-        <button class="icon" data-act="menu" data-i="${i}" title="…">⋯</button>
-        <div class="menu">
-          <button data-act="reveal" data-i="${i}">${esc(t("openFolder"))}</button>
-          <button data-act="rename" data-i="${i}">${esc(t("rename"))}</button>
-          <button data-act="clone"  data-i="${i}">${esc(t("clone"))}</button>
-          <hr>
-          <button class="danger" data-act="delete" data-i="${i}">${esc(t("delete"))}</button>
-        </div>
-      </span></div>`;
+      <button class="icon" data-act="menu" data-i="${i}" title="…">⋯</button></div>`;
   }).join("");
   list.querySelectorAll("[data-act]").forEach(b => {
     b.onclick = ev => { ev.stopPropagation(); act(b.dataset.act, rows[+b.dataset.i], b); };
@@ -449,10 +485,9 @@ function lock(on) {
 
 async function act(kind, p, el) {
   if (kind === "menu") {
-    const m = el.parentElement.querySelector(".menu");
-    const wasOpen = m.classList.contains("open");
+    const wasOpen = $("rowMenu").classList.contains("open") && openMenu === p;
     closeMenus();
-    if (!wasOpen) { m.classList.add("open"); openMenu = m; }
+    if (!wasOpen) openRowMenu(el, p);
     return;
   }
   closeMenus();
@@ -482,6 +517,7 @@ async function act(kind, p, el) {
 /* ---------------------------------------------------------------- dialogs */
 let mode = "new", target = null;
 function openProfileDialog(kind, p) {
+  closeMenus();
   mode = kind; target = p || null;
   $("pTitle").textContent = kind === "new" ? t("newProfile") : kind === "rename" ? t("rename") : t("clone");
   $("pOk").textContent    = kind === "new" ? t("create")     : kind === "rename" ? t("rename") : t("clone");
@@ -525,6 +561,7 @@ $("pOk").onclick = async () => {
 };
 
 function confirmDelete(p) {
+  closeMenus();
   target = p;
   $("cTitle").textContent = t("deleteTitle");
   $("cBody").textContent = t("deleteBody").replace("__N__", `${p.app} · ${p.name}`);
@@ -542,6 +579,7 @@ $("cOk").onclick = async () => {
 
 /* ---------------------------------------------------------------- settings */
 $("settings").onclick = async () => {
+  closeMenus();
   $("bdSettings").classList.add("open");
   try { $("rootPath").textContent = await invoke("profiles_root"); } catch (_) {}
 };
@@ -651,7 +689,7 @@ $("probeBtn").onclick = async () => {
 };
 
 $("bRescan").onclick = loadApps;
-$("advBtn").onclick = () => { $("bStatus").textContent = ""; $("bdTools").classList.add("open"); loadApps(); };
+$("advBtn").onclick = () => { closeMenus(); $("bStatus").textContent = ""; $("bdTools").classList.add("open"); loadApps(); };
 $("tClose").onclick = () => $("bdTools").classList.remove("open");
 
 document.querySelectorAll(".backdrop").forEach(bd => {
