@@ -71,10 +71,12 @@
   .row {
     display:flex; align-items:center; gap:10px; padding:10px 11px; margin-bottom:8px;
     background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
-    animation:rise .26s var(--ease) both;
     transition:border-color .16s, transform .14s var(--ease), box-shadow .16s;
   }
   .row:hover { border-color:var(--panel-3); transform:translateY(-1px); box-shadow:0 6px 18px -12px rgba(0,0,0,.7); }
+  /* Only rows that are genuinely new animate in. The list is polled every few seconds to keep the
+     running state honest, and replaying the entrance on every poll made the whole list flicker. */
+  .row.fresh { animation:rise .26s var(--ease) both; }
   @keyframes rise { from { opacity:0; transform:translateY(7px); } to { opacity:1; transform:none; } }
   .row .meta { flex:1; min-width:0; }
   .row .app  { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -289,6 +291,10 @@
 const invoke = window.__TAURI__.core.invoke;
 const $ = id => document.getElementById(id);
 let rows = [], busy = false, openMenu = null;
+// What the list currently shows. A poll that finds the same thing must not touch the DOM at all.
+let shownSig = null, shownKeys = new Set();
+const keyOf = p => `${p.app}\u0000${p.name}`;
+const sigOf = rs => rs.map(p => `${keyOf(p)}\u0000${p.running}\u0000${p.certain}`).join("\u0001");
 
 /* ---------------------------------------------------------------- i18n */
 const T = {
@@ -379,7 +385,7 @@ const t = k => (T[lang] && T[lang][k]) || T.en[k] || k;
 function applyLang() {
   document.documentElement.lang = lang;
   document.querySelectorAll("[data-i18n]").forEach(e => { e.textContent = t(e.dataset.i18n); });
-  render();
+  render();   // same data, new words: render() animates nothing because the keys are unchanged
 }
 
 /* ---------------------------------------------------------------- theme */
@@ -460,7 +466,8 @@ function render() {
     const main  = p.running
       ? `<button class="btn stop" data-act="stop" data-i="${i}">${esc(t("stop"))}</button>`
       : `<button class="btn primary" data-act="launch" data-i="${i}">${esc(t("launch"))}</button>`;
-    return `<div class="row" style="animation-delay:${Math.min(i,8)*22}ms">
+    const fresh = shownKeys.has(keyOf(p)) ? "" : " fresh";
+    return `<div class="row${fresh}" style="animation-delay:${Math.min(i,8)*22}ms">
       <span class="dot ${cls}" title="${esc(state)}"></span>
       <span class="meta"><div class="app">${esc(p.app)}</div><div class="sub">${esc(p.name)} · ${esc(state)}</div></span>
       ${main}
@@ -469,12 +476,19 @@ function render() {
   list.querySelectorAll("[data-act]").forEach(b => {
     b.onclick = ev => { ev.stopPropagation(); act(b.dataset.act, rows[+b.dataset.i], b); };
   });
+  shownKeys = new Set(rows.map(keyOf));
   say(`${rows.length} ${rows.length === 1 ? t("profile") : t("profiles")}`);
 }
 
-async function refresh() {
-  try { rows = await invoke("list_profiles"); render(); }
-  catch (e) { say(e, "err"); }
+async function refresh(force = false) {
+  try {
+    const next = await invoke("list_profiles");
+    const sig = sigOf(next);
+    if (!force && sig === shownSig) return;   // nothing changed — leave the DOM alone
+    shownSig = sig;
+    rows = next;
+    render();
+  } catch (e) { say(e, "err"); }
 }
 
 function lock(on) {
@@ -511,7 +525,7 @@ async function act(kind, p, el) {
     }
   } catch (e) { say(e, "err"); }
   lock(false);
-  setTimeout(refresh, kind === "launch" ? 2500 : 600);
+  setTimeout(() => refresh(), kind === "launch" ? 2500 : 600);
 }
 
 /* ---------------------------------------------------------------- dialogs */
@@ -718,7 +732,15 @@ $("pin").onclick = async () => {
   try { await invoke("add_to_start_menu"); $("pin").hidden = true; say(t("addedStart"), "ok"); }
   catch (e) { say(e, "err"); }
 };
-setInterval(() => { if (!busy && !document.querySelector(".backdrop.open") && !openMenu) refresh(); }, 5000);
+// Polling exists so the running state stays true when an app is launched or quit outside Multiapp.
+// It is skipped while a dialog or menu is open, while an action is in flight, and while the window
+// is not focused — a window nobody is looking at does not need a process sweep every few seconds.
+setInterval(() => {
+  if (busy || openMenu || document.querySelector(".backdrop.open")) return;
+  if (document.hidden || !document.hasFocus()) return;
+  refresh();
+}, 5000);
+window.addEventListener("focus", () => { if (!busy) refresh(); });
 </script>
 </body>
 </html>
