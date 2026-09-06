@@ -56,9 +56,8 @@ apps A cannot serve; bundle re-signing (B) is rejected as a default because it b
 auto-update, and Keychain access, and raises ToS/licensing risk.
 
 The report defines the adapter system, profile lifecycle, storage model, Keychain strategy (share the
-login Keychain by design, never extract secrets), a phased roadmap with testable acceptance criteria,
-and a risk register. The single most important open risk: **per-app behavior under `HOME` override is
-empirically unknowable without experiments** — the PoC phase exists precisely to convert 🟡/🟠 claims
+login Keychain by design, never extract secrets) and a risk register. The single most important open
+risk: **per-app behavior under `HOME` override is empirically unknowable without experiments** — the PoC phase exists precisely to convert 🟡/🟠 claims
 into verified facts before any product commitment.
 
 ---
@@ -611,7 +610,7 @@ Principles (constraint-driven):
   with different environment variables — functionally what a second Unix user does. No copying or
   redistribution of the developer's code, no signature tampering, no DRM/licensing/integrity
   interference, no authentication bypass. (🟡 — reasoned position, not legal advice; a legal review is
-  a production-phase gate, §24.)
+  a production-phase gate.)
 - **Multiple accounts vs. service terms:** most consumer AI services permit multiple accounts
   (work/personal) but some restrict simultaneous sessions or per-user seats (⚪ — per-service terms
   must be reviewed at adapter-authoring time and summarized in the adapter's `verdict.notes`). The
@@ -666,46 +665,7 @@ Each experiment converts a 🟡/🟠 into verified fact. Scripted, repeatable, r
 Intel note: E1–E10 rerun on one Intel Mac before MVP ships (mechanisms are architecture-independent
 🟡, but Rosetta-translated Electron apps and VM tier differ; C2 VM tier is Apple-Silicon-only 🔵).
 
-## 24. Phased Development Roadmap
-
-**Phase 0 — PoC (2–3 weeks).**
-Deliverables: E1–E10 executed and written up; compatibility verdicts for Claude, ChatGPT, Gemini,
-Antigravity, Notion, Telegram; probe-engine prototype (script-grade).
-Acceptance: every matrix cell in §8 upgraded from 🟠 to verified pass/fail; leak detector (E10) shows
-<5% false verdicts across 3 runs/app.
-Risks: `open -n` env propagation fails (E1) → fallback direct-spawn path validated instead.
-**Stop/redesign trigger:** if Claude *and* generic Electron fail isolation under `HOME` override, Arch A's
-value collapses → redesign around C1 or kill.
-
-**Phase 1 — MVP (4–8 weeks).**
-Deliverables: core library + CLI (create/list/launch/clone/delete/export/import/doctor), adapters
-(vscode-family, electron-home-redirect, claude, generic-native-guarded), probe engine productized,
-wrapper generation, signed+notarized menu-bar app with minimal UI.
-Acceptance: a new user can create 2 Claude profiles with different accounts and run them concurrently
-in <2 min; delete is staged+recoverable; import rejects traversal archives (test suite); zero writes
-outside product root + profile dirs (audited); all UI verdicts match probe results.
-Risks: adapter maintenance cost; Squirrel-update mid-run (E8 mitigation).
-**Stop/redesign:** if >30% of tier-1 target apps end "unsupported," reassess product scope before UI polish.
-
-**Phase 2 — Beta hardening (4–6 weeks).**
-Deliverables: onboarding + honest compatibility UX, templates, encrypted export, Sparkle updates for
-our app, telemetry-free diagnostics bundle, Intel validation run, docs incl. ToS guidance page,
-user-supplied adapter manifests (env/args only).
-Acceptance: 20 external beta users; <2% profile-data-loss incidents (target 0); doctor repairs 100% of
-artificially corrupted states in test matrix; app-update re-probe flow works across ≥2 real updates of Claude/VS Code.
-Risks: real-world app diversity; support load from "partial" verdicts.
-**Stop/redesign:** any confirmed data-loss bug class without a staging/rollback fix → halt release train.
-
-**Phase 3 — Production (6+ weeks).**
-Deliverables: 1.0 Developer ID release; legal review completed (ToS positioning, trademark use of app
-names/icons in UI); adapter update channel; decision gate on long-term hard-isolation tier (C1 pilot
-behind a flag); localization (uz/ru/en per fleet standard).
-Acceptance: crash-free sessions >99.5%; probe verdicts stable across one full quarter of app updates;
-uninstall leaves zero orphans (automated test).
-Risks: OS update (macOS 27) changes `open`/LS behavior — probe suite doubles as regression canary.
-**Stop/redesign:** legal review rejects trademarked-app presentation → rework UI naming before launch.
-
-## 25. Open Questions and Required Decisions
+## 24. Open Questions and Required Decisions
 
 1. ⚪ **E1 outcome** — env propagation through `open -n` decides launcher plumbing (blocker, Phase 0).
 2. ⚪ **ChatGPT/Gemini verdicts** (E4/E6) — decides whether "partial" tier exists in MVP marketing.
@@ -720,7 +680,7 @@ Risks: OS update (macOS 27) changes `open`/LS behavior — probe suite doubles a
 7. ⚪ Per-service ToS review list and cadence — needs owner and template before Beta.
 8. ⚪ Team/enterprise features (shared templates without shared secrets) — out of scope until 1.0.
 
-## 26. Final Recommendation
+## 25. Final Recommendation
 
 Build **Architecture A — the adapter-based profile-aware launcher** — as the MVP, precisely
 generalizing what multigravity-cli verifiably does (env + official-flag redirection of an untouched
@@ -732,7 +692,7 @@ C-variant tier; reject bundle re-signing (B) as a platform primitive on legal, s
 grounds. Proceed to Phase 0 immediately — ten scripted experiments (§23), two to three weeks, and every
 material unknown in this report becomes a verified fact before a line of product code is written.
 
-## 27. Success-Criteria Verification
+## 26. Success-Criteria Verification
 
 | # | Criterion (from the task) | Status | Where |
 |---|---|---|---|
@@ -750,11 +710,11 @@ material unknown in this report becomes a verified fact before a line of product
 | 12 | No bypassing of licensing/ToS/DRM/integrity recommended; risks documented | **PASS** | §10 (B rejected), §21 |
 | 13 | No re-signing in recommended MVP | **PASS** | §13 (A: binary untouched) |
 | 14 | Deletion/cleanup safety + rollback for every destructive op | **PASS** | §16, §22 |
-| 15 | Phased roadmap with deliverables, experiments, acceptance criteria, risks, stop triggers | **PASS** | §24 (+ `ROADMAP.md`) |
+| 15 | Phased roadmap with deliverables, experiments, acceptance criteria, risks, stop triggers | **WITHDRAWN** | written, then removed from this repository at the author's request; the report no longer publishes a roadmap |
 | 16 | Required artifacts: file map, sequence diagram, compat matrix (7 apps), decision matrix, directory tree, risk register, assumptions list, references | **PASS** | §3, §4, §8, §12, §18, Risk Register & Assumptions & References below |
 | 17 | Every important conclusion labeled with evidence level | **PASS** | 🟢🔵🟡🟠⚪ throughout |
 | 18 | Apple Silicon + Intel considered with limits identified | **PASS** | §11 (C2 AS-only), §23 Intel note |
-| 19 | Unsupported apps and unresolved restrictions surfaced, not hidden | **PASS** | §8 verdicts, §22 F9, §25 |
+| 19 | Unsupported apps and unresolved restrictions surfaced, not hidden | **PASS** | §8 verdicts, §22 F9, §24 |
 | 20 | English, decision-ready, exact 27-section structure | **PASS** | This document |
 
 ---

@@ -334,7 +334,7 @@ app/build.sh             swiftc build + DMG layout, no Xcode required
 app/make-assets.swift    icon and DMG background, drawn with CoreGraphics
 rust/crates/multiapp-core   paths, process matching, launching, profiles
 rust/crates/multiapp-cli    the portable command-line front end
-docs/                    research report, roadmap, experiment results
+docs/                    research report, experiment results
 scripts/test-windows.ps1 one-command Windows verification run
 .github/workflows/ci.yml build + real-app integration tests on all three OSes
 ```
@@ -362,7 +362,6 @@ The bash CLI has no automated suite; its verdicts come from the experiment logs 
 |---|---|
 | [`REPORT.md`](docs/REPORT.md) | The full technical design report — mechanisms, alternatives, compatibility analysis, risk register, and every conclusion labelled as verified, inferred, or unknown |
 | [`MULTIGRAVITY-ANALYSIS.md`](docs/MULTIGRAVITY-ANALYSIS.md) | Source-level analysis of the reference project this work started from, read from its actual files rather than its README |
-| [`ROADMAP.md`](docs/ROADMAP.md) | Milestones and their sequence |
 | [`BACKUP-MIGRATE-SPEC.md`](docs/BACKUP-MIGRATE-SPEC.md) | What can and cannot be migrated between machines, and why |
 | [`../WINDOWS.md`](WINDOWS.md) | Honest state of the Windows port |
 | [`experiments/`](docs/experiments/) | E1–E12 — the raw results, including the ones that disproved the original design |
