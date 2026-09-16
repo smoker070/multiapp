@@ -48,13 +48,21 @@ struct CLI {
 
     struct Session { let index: Int; let date: String; let cwd: String; let title: String }
 
-    static func sessions(of profile: String) -> [Session] {
-        run(["sessions", "claude", profile, "--raw"]).out
-            .split(separator: "\n").enumerated().compactMap { (i, line) in
-                let f = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
-                guard f.count >= 5 else { return nil }
-                return Session(index: i + 1, date: f[2], cwd: f[3], title: f[4])
-            }
+    /// Sessions in a profile — and why the list is empty, when it is.
+    ///
+    /// Returning the list alone turned "the CLI could not run" into "this profile has no sessions".
+    /// That is what the transfer dialog showed for a whole week: "no sessions in 'main'", while 56
+    /// sessions sat on disk and the real fault was an unrunnable python3.
+    static func sessions(of profile: String) -> (list: [Session], error: String?) {
+        let r = run(["sessions", "claude", profile, "--raw"])
+        let list = r.out.split(separator: "\n").enumerated().compactMap { (i, line) -> Session? in
+            let f = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard f.count >= 5 else { return nil }
+            return Session(index: i + 1, date: f[2], cwd: f[3], title: f[4])
+        }
+        guard r.code != 0 || (list.isEmpty && !r.err.isEmpty) else { return (list, nil) }
+        let msg = r.err.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (list, msg.isEmpty ? "the CLI exited with code \(r.code)" : msg)
     }
 
     static func apps() -> [App] {
@@ -499,15 +507,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
 
     private func buildSessionList(for source: String) {
-        let sessions = CLI.sessions(of: source)
+        let (sessions, failure) = CLI.sessions(of: source)
         let rowH: CGFloat = 22, width: CGFloat = 480
         let doc = FlippedView(frame: NSRect(x: 0, y: 0, width: width,
-                                            height: max(rowH * CGFloat(sessions.count), rowH)))
+                                            height: max(rowH * CGFloat(sessions.count), rowH * 3)))
         tBoxes = []
         if sessions.isEmpty {
-            let lbl = NSTextField(labelWithString: "no sessions in '\(source)'")
-            lbl.frame = NSRect(x: 8, y: 2, width: width - 16, height: rowH)
-            lbl.textColor = .secondaryLabelColor
+            // An empty list and a failed list are different facts, and the dialog says which.
+            let lbl = NSTextField(wrappingLabelWithString:
+                failure.map { "couldn't read sessions in '\(source)':\n\($0)" }
+                    ?? "no sessions in '\(source)'")
+            lbl.frame = NSRect(x: 8, y: 2, width: width - 16, height: rowH * 3)
+            lbl.textColor = failure == nil ? .secondaryLabelColor : .systemRed
             doc.addSubview(lbl)
         }
         for (i, sess) in sessions.enumerated() {
