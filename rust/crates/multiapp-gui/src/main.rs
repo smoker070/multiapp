@@ -334,7 +334,8 @@ struct AccountDto {
     id: String,
     sessions: usize,
     last: String,
-    used_today: bool,
+    /// The running Claude of this install wrote here since it started: the signed-in folder.
+    live: bool,
     titles: String,
 }
 
@@ -351,7 +352,7 @@ fn claude_accounts(profile: String) -> Result<Vec<AccountDto>, String> {
                 id: f[0].to_string(),
                 sessions: f[1].parse().unwrap_or(0),
                 last: f[2].to_string(),
-                used_today: f[3] == "1",
+                live: f[3] == "1",
                 titles: f[4].to_string(),
             })
         })

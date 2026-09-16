@@ -397,7 +397,7 @@ const T = {
         saveSessions:"Export sessions as", chooseSessionFile:"Choose a session archive",
         selected:"selected",
         allAccounts:"All accounts", chooseAccount:"Choose account…", sessWord:"sessions", sessWord1:"session", sessWord2:"sessions", lastWord:"last",
-        usedToday:"used today", emptyFolder:"empty",
+        usedToday:"open in Claude now", emptyFolder:"empty",
         accountNote:"Claude shows only the account you are signed into. Sessions from an account you no longer use are still on disk — copy them into the account you use now.",
         pickAccount:"Choose which account receives the copies.",
         alreadyThere:"Those sessions are already in that account.",
@@ -443,7 +443,7 @@ const T = {
         saveSessions:"Sessiyalarni saqlash", chooseSessionFile:"Sessiya arxivini tanlang",
         selected:"tanlandi",
         allAccounts:"Barcha akkauntlar", chooseAccount:"Akkauntni tanlang…", sessWord:"sessiya", sessWord1:"sessiya", sessWord2:"sessiya", lastWord:"oxirgi",
-        usedToday:"bugun ishlatilgan", emptyFolder:"bo‘sh",
+        usedToday:"hozir Claude’da ochiq", emptyFolder:"bo‘sh",
         accountNote:"Claude faqat siz kirgan akkauntni ko‘rsatadi. Endi ishlatmaydigan akkauntdagi sessiyalar diskda turibdi — ularni hozirgi akkauntingizga nusxalang.",
         pickAccount:"Nusxalar qaysi akkauntga tushishini tanlang.",
         alreadyThere:"Bu sessiyalar allaqachon o‘sha akkauntda.",
@@ -489,7 +489,7 @@ const T = {
         saveSessions:"Сохранить сессии как", chooseSessionFile:"Выберите архив сессий",
         selected:"выбрано",
         allAccounts:"Все аккаунты", chooseAccount:"Выберите аккаунт…", sessWord:"сессий", sessWord1:"сессия", sessWord2:"сессии", lastWord:"последняя",
-        usedToday:"использован сегодня", emptyFolder:"пусто",
+        usedToday:"сейчас открыт в Claude", emptyFolder:"пусто",
         accountNote:"Claude показывает только тот аккаунт, в который вы вошли. Сессии аккаунта, которым вы больше не пользуетесь, остались на диске — скопируйте их в текущий аккаунт.",
         pickAccount:"Выберите, в какой аккаунт скопировать.",
         alreadyThere:"Эти сессии уже в этом аккаунте.",
@@ -855,7 +855,7 @@ const shortId = id => id.split("/").map(x => x.slice(0, 8)).join("/");
 function acctLabel(a) {
   const parts = [a.sessions ? `${a.sessions} ${sessNoun(a.sessions)}` : t("emptyFolder")];
   if (a.last && a.last !== "-") parts.push(`${t("lastWord")} ${a.last.slice(0, 10)}`);
-  if (a.used_today) parts.push(t("usedToday"));
+  if (a.live) parts.push(t("usedToday"));
   const first = (a.titles || "").split(" | ")[0];
   return `${parts.join(" · ")}${first ? ` — ${first}` : ""}  (${shortId(a.id)})`;
 }
@@ -944,10 +944,12 @@ async function loadToAccounts() {
     sel.value = accts.length ? accts[0].id : "";
     sel.hidden = true;
   } else {
-    // Never pre-picked among several. Guessing is exactly how copies once landed in an empty
-    // folder the app does not show, reported as a success.
+    // Pre-picked only on evidence: the one folder the RUNNING Claude of that install has written
+    // since it started. Never by recency or by where a session was created — that guess sent 56
+    // copies into the other organisation's folder, where the app does not look.
     sel.innerHTML = `<option value="">${esc(t("chooseAccount"))}</option>` + accts.map(acctOption).join("");
-    sel.value = accts.some(a => a.id === keep) ? keep : "";
+    const live = accts.filter(a => a.live);
+    sel.value = accts.some(a => a.id === keep) ? keep : (live.length === 1 ? live[0].id : "");
     sel.hidden = false;
   }
   markNeed();
