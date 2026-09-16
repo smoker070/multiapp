@@ -221,7 +221,7 @@ hardware**.
 | Windows (`multiapp.ps1`) | Profile commands only, **never executed on Windows** |
 | Linux (`multiapp` bash) | Implemented from verified patterns, **never executed on Linux** |
 | Cross-platform CI | Green on Windows and Linux; skips the GUI test on macOS runners — see below |
-| Tauri GUI | Not started |
+| Tauri GUI (window app) | Windows and macOS: profiles, backup/restore, cookie report, probe, and — on macOS — Claude session transfer, export and import. Built by CI on both |
 
 **What is actually verified, and by what.** The Rust CLI is exercised on every push by a CI job that
 launches a real Chromium app, asserts it wrote into the isolated profile, asserts a prefix-named

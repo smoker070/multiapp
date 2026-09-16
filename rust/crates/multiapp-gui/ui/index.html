@@ -183,6 +183,22 @@
   .arow .n b { display:block; font-size:12.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .arow .n span { color:var(--muted); font-size:11px; }
   .arow .btn { padding:5px 9px; font-size:11px; }
+  /* session picker */
+  .slist {
+    margin-top:9px; max-height:210px; overflow-y:auto; padding:5px;
+    border:1px solid var(--line); border-radius:10px; background:var(--panel-2);
+  }
+  .srow { display:flex; gap:8px; align-items:flex-start; padding:6px 7px; border-radius:8px;
+          cursor:pointer; transition:background .12s; }
+  .srow:hover { background:var(--panel-3); }
+  .srow input { width:auto; margin:2px 0 0; accent-color:var(--accent); flex:none; }
+  .srow .st { flex:1; min-width:0; }
+  .srow .st b { display:block; font-size:12.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .srow .st span { color:var(--muted); font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:block; }
+  .linkbtn { background:none; border:0; color:var(--accent); font-size:11px; cursor:pointer;
+             padding:0; font-family:inherit; }
+  .linkbtn:hover { text-decoration:underline; }
+
   pre {
     background:var(--panel-2); border:1px solid var(--line); border-radius:9px; padding:10px;
     font-size:11px; max-height:230px; overflow:auto; white-space:pre-wrap; word-break:break-word;
@@ -201,6 +217,7 @@
   <div class="toolbar">
     <button class="btn primary" id="new" data-i18n="newProfile">New Profile</button>
     <button class="btn ghost" id="advBtn" data-i18n="tools">Tools</button>
+    <button class="btn ghost" id="sessBtn" data-i18n="sessions" hidden>Sessions</button>
   </div>
 
   <main id="list"></main>
@@ -287,6 +304,38 @@
     </div>
   </div>
 
+  <!-- Claude Code sessions. macOS only, and only when the CLI is installed: the id-minting and
+       transcript duplication live there, not in this app. -->
+  <div class="backdrop" id="bdSessions">
+    <div class="modal" style="max-width:430px">
+      <h2 data-i18n="sessionsTitle">Claude Code sessions</h2>
+      <div class="note" data-i18n="sessionsNote"></div>
+      <div style="display:flex;gap:9px;align-items:flex-end">
+        <div style="flex:1">
+          <label for="sFrom" data-i18n="from">From</label>
+          <select id="sFrom"></select>
+        </div>
+        <div style="padding-bottom:10px;color:var(--muted)">→</div>
+        <div style="flex:1">
+          <label for="sTo" data-i18n="to">To</label>
+          <select id="sTo"></select>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:11px">
+        <label style="margin:0" id="sCount"></label>
+        <button class="linkbtn" id="sAll" data-i18n="selectAll">Select all</button>
+      </div>
+      <div class="slist" id="sList"></div>
+      <div class="hint" id="sStatus"></div>
+      <div class="actions">
+        <button class="btn primary" id="sTransfer" data-i18n="transfer">Transfer</button>
+        <button class="btn ghost" id="sExport" data-i18n="exportSel">Export…</button>
+        <button class="btn ghost" id="sImport" data-i18n="importFile">Import…</button>
+      </div>
+      <div class="actions"><button class="btn ghost" id="sDone" data-i18n="close">Close</button></div>
+    </div>
+  </div>
+
 <script>
 const invoke = window.__TAURI__.core.invoke;
 const $ = id => document.getElementById(id);
@@ -324,7 +373,20 @@ const T = {
         scanning:"Scanning applications…", noApps:"No applications with a saved session were found.",
         saveAs:"Save backup as", chooseArchive:"Choose a Multiapp archive", backingUp:"Backing up",
         restoring:"Restoring…", done:"Done", archiveHolds:"This archive holds",
-        credentialWarning:"An archive can contain a live login. Treat it like a password." },
+        credentialWarning:"An archive can contain a live login. Treat it like a password.",
+        sessions:"Sessions", sessionsTitle:"Claude Code sessions",
+        sessionsNote:"Copy sessions between profiles. Each copy is independent — new ids and its own transcript — so the two profiles never write to one conversation. The originals stay where they are.",
+        from:"From", to:"To", selectAll:"Select all", selectNone:"Select none",
+        transfer:"Transfer", exportSel:"Export…", importFile:"Import…",
+        loadingSessions:"Reading sessions…", noSessionsIn:"no sessions in",
+        pickSome:"Tick at least one session.", sameProfile:"Source and destination must differ.",
+        transferring:"Copying sessions…", restartDest:"Restart that profile to see them.",
+        exporting:"Exporting…", importing:"Importing…",
+        sessionsPrivacy:"Sessions contain your private conversations. Treat the file like a password.",
+        confirmTransfer:"Copy __N__ session(s) into '__T__'?",
+        confirmImport:"Import sessions from this file into '__T__'?",
+        saveSessions:"Export sessions as", chooseSessionFile:"Choose a session archive",
+        selected:"selected" },
   uz: { newProfile:"Yangi profil", tools:"Vositalar", settings:"Sozlamalar", theme:"Mavzu", dark:"Qorong‘i",
         light:"Yorug‘", system:"Tizim", language:"Til", storage:"Profillar joyi", close:"Yopish",
         application:"Ilova", profileName:"Profil nomi", cancel:"Bekor qilish", create:"Yaratish",
@@ -351,7 +413,20 @@ const T = {
         scanning:"Ilovalar skanerlanmoqda…", noApps:"Saqlangan sessiyasi bor ilova topilmadi.",
         saveAs:"Zaxirani saqlash", chooseArchive:"Multiapp arxivini tanlang", backingUp:"Saqlanmoqda",
         restoring:"Tiklanmoqda…", done:"Tayyor", archiveHolds:"Bu arxivda",
-        credentialWarning:"Arxivda tirik login bo‘lishi mumkin. Uni parol kabi saqlang." },
+        credentialWarning:"Arxivda tirik login bo‘lishi mumkin. Uni parol kabi saqlang.",
+        sessions:"Sessiyalar", sessionsTitle:"Claude Code sessiyalari",
+        sessionsNote:"Sessiyalarni profillar orasida ko‘chiring. Har bir nusxa mustaqil — yangi id va o‘z transkripti — shuning uchun ikki profil bitta suhbatga yozmaydi. Asl nusxalar joyida qoladi.",
+        from:"Qayerdan", to:"Qayerga", selectAll:"Hammasini tanlash", selectNone:"Tanlovni bekor qilish",
+        transfer:"Ko‘chirish", exportSel:"Eksport…", importFile:"Import…",
+        loadingSessions:"Sessiyalar o‘qilmoqda…", noSessionsIn:"sessiya yo‘q:",
+        pickSome:"Kamida bitta sessiyani belgilang.", sameProfile:"Manba va manzil har xil bo‘lishi kerak.",
+        transferring:"Sessiyalar ko‘chirilmoqda…", restartDest:"Ko‘rish uchun o‘sha profilni qayta ishga tushiring.",
+        exporting:"Eksport qilinmoqda…", importing:"Import qilinmoqda…",
+        sessionsPrivacy:"Sessiyalarda shaxsiy suhbatlaringiz bor. Faylni parol kabi saqlang.",
+        confirmTransfer:"__N__ ta sessiya '__T__' profiliga ko‘chirilsinmi?",
+        confirmImport:"Shu fayldan sessiyalar '__T__' profiliga import qilinsinmi?",
+        saveSessions:"Sessiyalarni saqlash", chooseSessionFile:"Sessiya arxivini tanlang",
+        selected:"tanlandi" },
   ru: { newProfile:"Новый профиль", tools:"Инструменты", settings:"Настройки", theme:"Тема", dark:"Тёмная",
         light:"Светлая", system:"Системная", language:"Язык", storage:"Хранилище профилей", close:"Закрыть",
         application:"Приложение", profileName:"Имя профиля", cancel:"Отмена", create:"Создать",
@@ -378,7 +453,20 @@ const T = {
         scanning:"Сканирование приложений…", noApps:"Приложений с сохранённой сессией не найдено.",
         saveAs:"Сохранить резервную копию", chooseArchive:"Выберите архив Multiapp", backingUp:"Сохранение",
         restoring:"Восстановление…", done:"Готово", archiveHolds:"В этом архиве",
-        credentialWarning:"Архив может содержать активный вход. Храните его как пароль." },
+        credentialWarning:"Архив может содержать активный вход. Храните его как пароль.",
+        sessions:"Сессии", sessionsTitle:"Сессии Claude Code",
+        sessionsNote:"Копируйте сессии между профилями. Каждая копия независима — новые id и собственный транскрипт, — поэтому два профиля не пишут в один разговор. Оригиналы остаются на месте.",
+        from:"Откуда", to:"Куда", selectAll:"Выбрать все", selectNone:"Снять выбор",
+        transfer:"Перенести", exportSel:"Экспорт…", importFile:"Импорт…",
+        loadingSessions:"Чтение сессий…", noSessionsIn:"нет сессий в",
+        pickSome:"Отметьте хотя бы одну сессию.", sameProfile:"Источник и назначение должны отличаться.",
+        transferring:"Копирование сессий…", restartDest:"Перезапустите этот профиль, чтобы увидеть их.",
+        exporting:"Экспорт…", importing:"Импорт…",
+        sessionsPrivacy:"В сессиях ваши личные разговоры. Храните файл как пароль.",
+        confirmTransfer:"Скопировать __N__ сессий в «__T__»?",
+        confirmImport:"Импортировать сессии из этого файла в «__T__»?",
+        saveSessions:"Сохранить сессии как", chooseSessionFile:"Выберите архив сессий",
+        selected:"выбрано" },
 };
 let lang = "en";
 const t = k => (T[lang] && T[lang][k]) || T.en[k] || k;
@@ -702,6 +790,142 @@ $("probeBtn").onclick = async () => {
   $("probeBtn").disabled = false;
 };
 
+/* ---------------------------------------------------------------- Claude sessions
+   The index files live inside a profile; the transcripts live in the real ~/.claude, OUTSIDE it.
+   So a session is not a file to copy — the CLI mints new ids and duplicates the transcript, and
+   this screen is a picker in front of that. */
+let sess = [];
+
+function profileTargets() {
+  // "main" is the unprofiled install; the rest are this machine's claude profiles.
+  return ["main", ...rows.filter(p => p.app.toLowerCase() === "claude").map(p => p.name)];
+}
+
+function fillTargets() {
+  const targets = profileTargets();
+  const opts = targets.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+  const from = $("sFrom"), to = $("sTo");
+  const keepFrom = from.value, keepTo = to.value;
+  from.innerHTML = opts; to.innerHTML = opts;
+  from.value = targets.includes(keepFrom) ? keepFrom : "main";
+  // default the destination to something OTHER than the source, so the first click is valid
+  to.value = targets.includes(keepTo) && keepTo !== from.value
+    ? keepTo : (targets.find(n => n !== from.value) || from.value);
+}
+
+function sessStatus(msg, kind = "") { const s = $("sStatus"); s.textContent = msg; s.className = "hint " + kind; }
+const sessPicks = () => [...document.querySelectorAll("#sList input:checked")].map(i => i.value);
+
+function updateCount() {
+  const n = sessPicks().length;
+  $("sCount").textContent = sess.length ? `${n} / ${sess.length} ${t("selected")}` : "";
+  $("sAll").textContent = n === sess.length && sess.length ? t("selectNone") : t("selectAll");
+}
+
+// Switching profiles starts a new read while the previous one may still be in flight. Whichever
+// answer arrives last would otherwise win, and the picks are POSITIONS in the list — a list left
+// over from another profile would transfer the wrong sessions. Only the newest read may paint.
+let sessSeq = 0;
+
+async function loadSessions() {
+  const box = $("sList"), from = $("sFrom").value;
+  const mine = ++sessSeq;
+  sess = [];
+  box.innerHTML = `<div class="note" style="margin:6px">${esc(t("loadingSessions"))}</div>`;
+  updateCount();
+  try {
+    const got = await invoke("claude_sessions", { profile: from });
+    if (mine !== sessSeq) return;
+    sess = got;
+  } catch (e) {
+    if (mine !== sessSeq) return;
+    // The CLI failing and the profile being empty are different facts, and this says which.
+    box.innerHTML = `<div class="hint bad" style="margin:6px">${esc(String(e))}</div>`;
+    return;
+  }
+  if (!sess.length) {
+    box.innerHTML = `<div class="note" style="margin:6px">${esc(t("noSessionsIn"))} '${esc(from)}'</div>`;
+    return;
+  }
+  box.innerHTML = sess.map(s => `<label class="srow">
+      <input type="checkbox" value="${s.index}">
+      <span class="st"><b>${esc(s.title)}</b><span>${esc(s.date)} · ${esc(s.cwd)}</span></span>
+    </label>`).join("");
+  box.querySelectorAll("input").forEach(i => { i.onchange = updateCount; });
+  updateCount();
+}
+
+$("sessBtn").onclick = () => {
+  closeMenus();
+  sessStatus("");
+  fillTargets();
+  $("bdSessions").classList.add("open");
+  loadSessions();
+};
+$("sDone").onclick = () => $("bdSessions").classList.remove("open");
+$("sFrom").onchange = () => {
+  if ($("sTo").value === $("sFrom").value) {
+    const other = profileTargets().find(n => n !== $("sFrom").value);
+    if (other) $("sTo").value = other;
+  }
+  loadSessions();
+};
+$("sAll").onclick = () => {
+  const on = sessPicks().length !== sess.length;
+  document.querySelectorAll("#sList input").forEach(i => { i.checked = on; });
+  updateCount();
+};
+
+$("sTransfer").onclick = async () => {
+  const from = $("sFrom").value, to = $("sTo").value, picks = sessPicks();
+  if (from === to)     return sessStatus(t("sameProfile"), "bad");
+  if (!picks.length)   return sessStatus(t("pickSome"), "bad");
+  // Writing into another profile is not undoable from here, so it is confirmed first.
+  const ok = await dialog().confirm(
+    t("confirmTransfer").replace("__N__", picks.length).replace("__T__", to),
+    { title: t("sessionsTitle"), kind: "warning" });
+  if (!ok) return;
+  sessStatus(t("transferring"));
+  try {
+    const msg = await invoke("transfer_sessions", { from, to, picks: picks.join(",") });
+    sessStatus(`${msg.trim()}\n${t("restartDest")}`.replace(/\n/g, " — "), "good");
+  } catch (e) { sessStatus(String(e), "bad"); }
+};
+
+$("sExport").onclick = async () => {
+  const from = $("sFrom").value, picks = sessPicks();
+  if (!picks.length) return sessStatus(t("pickSome"), "bad");
+  try {
+    const out = await dialog().save({
+      title: t("saveSessions"),
+      defaultPath: `multiapp-claude-${from.replace(/[^A-Za-z0-9._-]/g, "-")}-${stamp()}.tar.gz`,
+      filters: [{ name: "Multiapp sessions", extensions: ["gz", "tar.gz"] }],
+    });
+    if (!out) return;
+    sessStatus(t("exporting"));
+    const msg = await invoke("export_sessions", { profile: from, out, picks: picks.join(",") });
+    sessStatus(msg.trim(), "good");
+    say(t("sessionsPrivacy"));
+  } catch (e) { sessStatus(String(e), "bad"); }
+};
+
+$("sImport").onclick = async () => {
+  const to = $("sTo").value;
+  try {
+    const file = await dialog().open({
+      title: t("chooseSessionFile"), multiple: false,
+      filters: [{ name: "Multiapp sessions", extensions: ["gz", "tar.gz"] }],
+    });
+    if (!file) return;
+    const ok = await dialog().confirm(t("confirmImport").replace("__T__", to),
+      { title: t("sessionsTitle"), kind: "warning" });
+    if (!ok) return;
+    sessStatus(t("importing"));
+    const msg = await invoke("import_sessions", { profile: to, file });
+    sessStatus(`${msg.trim()} — ${t("restartDest")}`, "good");
+  } catch (e) { sessStatus(String(e), "bad"); }
+};
+
 $("bRescan").onclick = loadApps;
 $("advBtn").onclick = () => { closeMenus(); $("bStatus").textContent = ""; $("bdTools").classList.add("open"); loadApps(); };
 $("tClose").onclick = () => $("bdTools").classList.remove("open");
@@ -724,6 +948,9 @@ $("refresh").onclick = () => { $("refresh").classList.add("spin"); refresh().fin
   loadPrefs(); applyLang();
   await refresh();
   $("advBtn").hidden = false;
+  // Sessions need the macOS CLI. Showing a button that can only ever say "not installed" is worse
+  // than not showing it, so the backend is asked first.
+  try { $("sessBtn").hidden = !(await invoke("advanced_available")); } catch (_) {}
   try {
     if (!(await invoke("in_start_menu")) && navigator.userAgent.includes("Windows")) $("pin").hidden = false;
   } catch (_) {}

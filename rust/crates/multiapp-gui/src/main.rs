@@ -31,8 +31,7 @@ fn list_profiles() -> Result<Vec<ProfileDto>, String> {
         .into_iter()
         .map(|p| ProfileDto { app: p.app, name: p.name, running: p.running, certain: p.certain })
         .collect();
-    v.sort_by(|a, b| (a.app.to_lowercase(), a.name.to_lowercase())
-        .cmp(&(b.app.to_lowercase(), b.name.to_lowercase())));
+    v.sort_by_key(|p| (p.app.to_lowercase(), p.name.to_lowercase()));
     Ok(v)
 }
 
@@ -260,36 +259,111 @@ fn advanced_available() -> bool {
     }
 }
 
-/// Run one of the macOS-only commands and hand back its output verbatim.
-#[tauri::command]
-fn run_advanced(args: Vec<String>) -> Result<String, String> {
+/// Run one of the macOS-only commands.
+///
+/// A non-zero exit is an `Err`, not text. Handing back stdout regardless of the exit status is how
+/// a failure becomes an answer: the same shape gave "no sessions found" for a week while the real
+/// fault was an unrunnable python3. Everything that shells out goes through here.
+fn advanced(args: &[&str]) -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
-        // An allowlist, not a passthrough: this takes arguments from a web view, and a UI bug must
+        // An allowlist, not a passthrough: these arguments come from a web view, and a UI bug must
         // not be able to turn into "run whatever you like".
         const ALLOWED: &[&str] = &[
             "migrate-list", "backup", "restore", "session-check", "session-backup",
             "session-restore", "app-export", "app-import", "list-installed", "sessions",
             "transfer", "export", "import", "scan", "probe", "apps", "doctor",
         ];
-        let first = args.first().map(|s| s.as_str()).unwrap_or("");
+        let first = args.first().copied().unwrap_or("");
         if !ALLOWED.contains(&first) {
             return Err(format!("'{first}' is not an allowed command"));
         }
         let cli = find_bash_cli().ok_or("the multiapp CLI is not installed")?;
         let out = std::process::Command::new(&cli)
-            .args(&args)
+            .args(args)
             .output()
-            .map_err(|e| e.to_string())?;
-        let mut text = String::from_utf8_lossy(&out.stdout).to_string();
-        text.push_str(&String::from_utf8_lossy(&out.stderr));
-        Ok(text)
+            .map_err(|e| format!("could not run the multiapp CLI: {e}"))?;
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        if out.status.success() {
+            return Ok(stdout);
+        }
+        Err(if stderr.is_empty() {
+            format!("`multiapp {first}` failed ({})", out.status)
+        } else {
+            stderr
+        })
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = args;
         Err("these commands are macOS-only for now".into())
     }
+}
+
+/// Run one of the macOS-only commands and hand back its output verbatim.
+#[tauri::command]
+fn run_advanced(args: Vec<String>) -> Result<String, String> {
+    advanced(&args.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+#[derive(Serialize)]
+struct SessionDto {
+    /// 1-based position in this profile's list — the selector the CLI itself takes.
+    index: usize,
+    date: String,
+    cwd: String,
+    title: String,
+}
+
+/// Claude Code sessions saved in a profile ("main" is the unprofiled install).
+///
+/// Sessions are a special case: the index files live inside the profile, but the transcripts live
+/// in the real `~/.claude`, outside it. That is why copying a session is a CLI command with its own
+/// id-minting logic rather than a file copy, and why this screen exists at all.
+#[tauri::command]
+fn claude_sessions(profile: String) -> Result<Vec<SessionDto>, String> {
+    let out = advanced(&["sessions", "claude", &profile, "--raw"])?;
+    Ok(out
+        .lines()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let f: Vec<&str> = line.split('\t').collect();
+            (f.len() >= 5).then(|| SessionDto {
+                index: i + 1,
+                date: f[2].to_string(),
+                cwd: f[3].to_string(),
+                title: f[4].to_string(),
+            })
+        })
+        .collect())
+}
+
+/// Copy sessions from one profile into another as INDEPENDENT copies (new ids, duplicated
+/// transcript). The originals are untouched.
+#[tauri::command]
+fn transfer_sessions(from: String, to: String, picks: String) -> Result<String, String> {
+    if from == to {
+        return Err("source and destination are the same profile".into());
+    }
+    advanced(&["transfer", "claude", &from, &to, &picks])
+}
+
+/// Write chosen sessions to an archive that can be carried to another machine.
+#[tauri::command]
+fn export_sessions(profile: String, out: String, picks: String) -> Result<String, String> {
+    advanced(&["export", "claude", &profile, &out, &picks])
+}
+
+#[tauri::command]
+fn import_sessions(profile: String, file: String) -> Result<String, String> {
+    advanced(&["import", "claude", &profile, &file])
+}
+
+/// What session data an app holds and whether it would survive a move to another Mac.
+#[tauri::command]
+fn session_check(app: String) -> Result<String, String> {
+    advanced(&["session-check", &app])
 }
 
 
@@ -402,6 +476,11 @@ fn main() {
             reveal_profile,
             advanced_available,
             run_advanced,
+            claude_sessions,
+            transfer_sessions,
+            export_sessions,
+            import_sessions,
+            session_check,
             list_app_data,
             backup_app,
             archive_info,
