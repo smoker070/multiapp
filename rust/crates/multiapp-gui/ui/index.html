@@ -184,6 +184,11 @@
   .arow .n span { color:var(--muted); font-size:11px; }
   .arow .btn { padding:5px 9px; font-size:11px; }
   /* session picker */
+  .xfer { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  @media (max-width:520px) { .xfer { grid-template-columns:1fr; } }
+  .xfer .side { min-width:0; }
+  .xfer select.acct { margin-top:6px; font-size:12px; padding:7px 9px; color:var(--muted); }
+  .xfer select.acct.need { border-color:var(--warn); color:var(--text); }
   .slist {
     margin-top:9px; max-height:210px; overflow-y:auto; padding:5px;
     border:1px solid var(--line); border-radius:10px; background:var(--panel-2);
@@ -310,17 +315,21 @@
     <div class="modal" style="max-width:430px">
       <h2 data-i18n="sessionsTitle">Claude Code sessions</h2>
       <div class="note" data-i18n="sessionsNote"></div>
-      <div style="display:flex;gap:9px;align-items:flex-end">
-        <div style="flex:1">
+      <!-- Profile AND account on each side. One install can hold several account folders, and
+           Claude shows only the signed-in one — so "main → main" is a real transfer, between them. -->
+      <div class="xfer">
+        <div class="side">
           <label for="sFrom" data-i18n="from">From</label>
           <select id="sFrom"></select>
+          <select id="sFromAcct" class="acct"></select>
         </div>
-        <div style="padding-bottom:10px;color:var(--muted)">→</div>
-        <div style="flex:1">
+        <div class="side">
           <label for="sTo" data-i18n="to">To</label>
           <select id="sTo"></select>
+          <select id="sToAcct" class="acct"></select>
         </div>
       </div>
+      <div class="note" id="sAcctNote" data-i18n="accountNote"></div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-top:11px">
         <label style="margin:0" id="sCount"></label>
         <button class="linkbtn" id="sAll" data-i18n="selectAll">Select all</button>
@@ -386,7 +395,13 @@ const T = {
         confirmTransfer:"Copy __N__ session(s) into '__T__'?",
         confirmImport:"Import sessions from this file into '__T__'?",
         saveSessions:"Export sessions as", chooseSessionFile:"Choose a session archive",
-        selected:"selected" },
+        selected:"selected",
+        allAccounts:"All accounts", chooseAccount:"Choose account…", sessWord:"sessions", sessWord1:"session", sessWord2:"sessions", lastWord:"last",
+        usedToday:"used today", emptyFolder:"empty",
+        accountNote:"Claude shows only the account you are signed into. Sessions from an account you no longer use are still on disk — copy them into the account you use now.",
+        pickAccount:"Choose which account receives the copies.",
+        alreadyThere:"Those sessions are already in that account.",
+        confirmTransferAcct:"Copy __N__ session(s) into '__T__', account: __A__?" },
   uz: { newProfile:"Yangi profil", tools:"Vositalar", settings:"Sozlamalar", theme:"Mavzu", dark:"Qorong‘i",
         light:"Yorug‘", system:"Tizim", language:"Til", storage:"Profillar joyi", close:"Yopish",
         application:"Ilova", profileName:"Profil nomi", cancel:"Bekor qilish", create:"Yaratish",
@@ -426,7 +441,13 @@ const T = {
         confirmTransfer:"__N__ ta sessiya '__T__' profiliga ko‘chirilsinmi?",
         confirmImport:"Shu fayldan sessiyalar '__T__' profiliga import qilinsinmi?",
         saveSessions:"Sessiyalarni saqlash", chooseSessionFile:"Sessiya arxivini tanlang",
-        selected:"tanlandi" },
+        selected:"tanlandi",
+        allAccounts:"Barcha akkauntlar", chooseAccount:"Akkauntni tanlang…", sessWord:"sessiya", sessWord1:"sessiya", sessWord2:"sessiya", lastWord:"oxirgi",
+        usedToday:"bugun ishlatilgan", emptyFolder:"bo‘sh",
+        accountNote:"Claude faqat siz kirgan akkauntni ko‘rsatadi. Endi ishlatmaydigan akkauntdagi sessiyalar diskda turibdi — ularni hozirgi akkauntingizga nusxalang.",
+        pickAccount:"Nusxalar qaysi akkauntga tushishini tanlang.",
+        alreadyThere:"Bu sessiyalar allaqachon o‘sha akkauntda.",
+        confirmTransferAcct:"__N__ ta sessiya '__T__' profilidagi __A__ akkauntiga nusxalansinmi?" },
   ru: { newProfile:"Новый профиль", tools:"Инструменты", settings:"Настройки", theme:"Тема", dark:"Тёмная",
         light:"Светлая", system:"Системная", language:"Язык", storage:"Хранилище профилей", close:"Закрыть",
         application:"Приложение", profileName:"Имя профиля", cancel:"Отмена", create:"Создать",
@@ -466,7 +487,13 @@ const T = {
         confirmTransfer:"Скопировать __N__ сессий в «__T__»?",
         confirmImport:"Импортировать сессии из этого файла в «__T__»?",
         saveSessions:"Сохранить сессии как", chooseSessionFile:"Выберите архив сессий",
-        selected:"выбрано" },
+        selected:"выбрано",
+        allAccounts:"Все аккаунты", chooseAccount:"Выберите аккаунт…", sessWord:"сессий", sessWord1:"сессия", sessWord2:"сессии", lastWord:"последняя",
+        usedToday:"использован сегодня", emptyFolder:"пусто",
+        accountNote:"Claude показывает только тот аккаунт, в который вы вошли. Сессии аккаунта, которым вы больше не пользуетесь, остались на диске — скопируйте их в текущий аккаунт.",
+        pickAccount:"Выберите, в какой аккаунт скопировать.",
+        alreadyThere:"Эти сессии уже в этом аккаунте.",
+        confirmTransferAcct:"Скопировать __N__ сессий в «__T__», аккаунт: __A__?" },
 };
 let lang = "en";
 const t = k => (T[lang] && T[lang][k]) || T.en[k] || k;
@@ -795,6 +822,8 @@ $("probeBtn").onclick = async () => {
    So a session is not a file to copy — the CLI mints new ids and duplicates the transcript, and
    this screen is a picker in front of that. */
 let sess = [];
+let toAccts = [];
+const checked = new Set();   // survives filtering, so narrowing the list does not lose ticks
 
 function profileTargets() {
   // "main" is the unprofiled install; the rest are this machine's claude profiles.
@@ -808,29 +837,74 @@ function fillTargets() {
   const keepFrom = from.value, keepTo = to.value;
   from.innerHTML = opts; to.innerHTML = opts;
   from.value = targets.includes(keepFrom) ? keepFrom : "main";
-  // default the destination to something OTHER than the source, so the first click is valid
-  to.value = targets.includes(keepTo) && keepTo !== from.value
-    ? keepTo : (targets.find(n => n !== from.value) || from.value);
+  // Same install is a valid destination now — between its account folders — so it is no longer
+  // steered away from.
+  to.value = targets.includes(keepTo) ? keepTo : from.value;
 }
+
+// 1 session / 2 sessions; Russian also needs 2–4 сессии vs 5+ сессий
+function sessNoun(n) {
+  // English "21 sessions" but Russian "21 сессия": the mod-10 rule is Russian-only
+  if (lang !== "ru") return n === 1 ? t("sessWord1") : t("sessWord");
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return t("sessWord1");
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return t("sessWord2");
+  return t("sessWord");
+}
+const shortId = id => id.split("/").map(x => x.slice(0, 8)).join("/");
+function acctLabel(a) {
+  const parts = [a.sessions ? `${a.sessions} ${sessNoun(a.sessions)}` : t("emptyFolder")];
+  if (a.last && a.last !== "-") parts.push(`${t("lastWord")} ${a.last.slice(0, 10)}`);
+  if (a.used_today) parts.push(t("usedToday"));
+  const first = (a.titles || "").split(" | ")[0];
+  return `${parts.join(" · ")}${first ? ` — ${first}` : ""}  (${shortId(a.id)})`;
+}
+const acctOption = a => `<option value="${esc(a.id)}" title="${esc(a.titles)}">${esc(acctLabel(a))}</option>`;
 
 function sessStatus(msg, kind = "") { const s = $("sStatus"); s.textContent = msg; s.className = "hint " + kind; }
 const sessPicks = () => [...document.querySelectorAll("#sList input:checked")].map(i => i.value);
+const visibleSess = () => { const f = $("sFromAcct").value; return f ? sess.filter(s => s.account === f) : sess; };
 
 function updateCount() {
-  const n = sessPicks().length;
-  $("sCount").textContent = sess.length ? `${n} / ${sess.length} ${t("selected")}` : "";
-  $("sAll").textContent = n === sess.length && sess.length ? t("selectNone") : t("selectAll");
+  const n = sessPicks().length, v = visibleSess().length;
+  $("sCount").textContent = v ? `${n} / ${v} ${t("selected")}` : "";
+  $("sAll").textContent = n === v && v ? t("selectNone") : t("selectAll");
 }
 
-// Switching profiles starts a new read while the previous one may still be in flight. Whichever
-// answer arrives last would otherwise win, and the picks are POSITIONS in the list — a list left
-// over from another profile would transfer the wrong sessions. Only the newest read may paint.
-let sessSeq = 0;
+function markNeed() {
+  const sel = $("sToAcct");
+  sel.classList.toggle("need", !sel.hidden && !sel.value);
+  // the explanation matters only when an account choice is actually on screen
+  $("sAcctNote").hidden = sel.hidden && $("sFromAcct").hidden;
+}
+
+// Every read below can be overtaken by a newer one (switching profiles quickly). Picks are
+// POSITIONS in a list, so a stale answer painting over a newer one would transfer the wrong
+// sessions. Only the newest read of each kind may paint.
+let sessSeq = 0, fromSeq = 0, toSeq = 0;
+
+function renderSess() {
+  const box = $("sList"), list = visibleSess();
+  const many = new Set(sess.map(s => s.account)).size > 1 && !$("sFromAcct").value;
+  if (!list.length) {
+    box.innerHTML = `<div class="note" style="margin:6px">${esc(t("noSessionsIn"))} '${esc($("sFrom").value)}'</div>`;
+    updateCount();
+    return;
+  }
+  box.innerHTML = list.map(s => `<label class="srow">
+      <input type="checkbox" value="${s.index}"${checked.has(String(s.index)) ? " checked" : ""}>
+      <span class="st"><b>${esc(s.title)}</b><span>${esc(s.date)}${many ? ` · ${esc(shortId(s.account))}` : ""} · ${esc(s.cwd)}</span></span>
+    </label>`).join("");
+  box.querySelectorAll("input").forEach(i => {
+    i.onchange = () => { i.checked ? checked.add(i.value) : checked.delete(i.value); updateCount(); };
+  });
+  updateCount();
+}
 
 async function loadSessions() {
   const box = $("sList"), from = $("sFrom").value;
   const mine = ++sessSeq;
-  sess = [];
+  sess = []; checked.clear();
   box.innerHTML = `<div class="note" style="margin:6px">${esc(t("loadingSessions"))}</div>`;
   updateCount();
   try {
@@ -843,16 +917,40 @@ async function loadSessions() {
     box.innerHTML = `<div class="hint bad" style="margin:6px">${esc(String(e))}</div>`;
     return;
   }
-  if (!sess.length) {
-    box.innerHTML = `<div class="note" style="margin:6px">${esc(t("noSessionsIn"))} '${esc(from)}'</div>`;
-    return;
+  renderSess();
+}
+
+async function loadFromAccounts() {
+  const mine = ++fromSeq, sel = $("sFromAcct"), keep = sel.value;
+  let accts = [];
+  try { accts = await invoke("claude_accounts", { profile: $("sFrom").value }); } catch (_) { accts = []; }
+  if (mine !== fromSeq) return;
+  const holding = accts.filter(a => a.sessions);
+  sel.innerHTML = `<option value="">${esc(t("allAccounts"))}</option>` + holding.map(acctOption).join("");
+  sel.value = holding.some(a => a.id === keep) ? keep : "";
+  sel.hidden = holding.length <= 1;   // one account holding sessions: nothing to filter by
+  markNeed();
+  renderSess();
+}
+
+async function loadToAccounts() {
+  const mine = ++toSeq, sel = $("sToAcct"), keep = sel.value;
+  let accts = [];
+  try { accts = await invoke("claude_accounts", { profile: $("sTo").value }); } catch (_) { accts = []; }
+  if (mine !== toSeq) return;
+  toAccts = accts;
+  if (accts.length <= 1) {
+    sel.innerHTML = accts.map(acctOption).join("");
+    sel.value = accts.length ? accts[0].id : "";
+    sel.hidden = true;
+  } else {
+    // Never pre-picked among several. Guessing is exactly how copies once landed in an empty
+    // folder the app does not show, reported as a success.
+    sel.innerHTML = `<option value="">${esc(t("chooseAccount"))}</option>` + accts.map(acctOption).join("");
+    sel.value = accts.some(a => a.id === keep) ? keep : "";
+    sel.hidden = false;
   }
-  box.innerHTML = sess.map(s => `<label class="srow">
-      <input type="checkbox" value="${s.index}">
-      <span class="st"><b>${esc(s.title)}</b><span>${esc(s.date)} · ${esc(s.cwd)}</span></span>
-    </label>`).join("");
-  box.querySelectorAll("input").forEach(i => { i.onchange = updateCount; });
-  updateCount();
+  markNeed();
 }
 
 $("sessBtn").onclick = () => {
@@ -860,35 +958,39 @@ $("sessBtn").onclick = () => {
   sessStatus("");
   fillTargets();
   $("bdSessions").classList.add("open");
-  loadSessions();
+  loadSessions(); loadFromAccounts(); loadToAccounts();
 };
 $("sDone").onclick = () => $("bdSessions").classList.remove("open");
-$("sFrom").onchange = () => {
-  if ($("sTo").value === $("sFrom").value) {
-    const other = profileTargets().find(n => n !== $("sFrom").value);
-    if (other) $("sTo").value = other;
-  }
-  loadSessions();
-};
+$("sFrom").onchange = () => { loadSessions(); loadFromAccounts(); };
+$("sTo").onchange = () => loadToAccounts();
+$("sFromAcct").onchange = () => renderSess();
+$("sToAcct").onchange = () => { sessStatus(""); markNeed(); };
 $("sAll").onclick = () => {
-  const on = sessPicks().length !== sess.length;
-  document.querySelectorAll("#sList input").forEach(i => { i.checked = on; });
+  const on = sessPicks().length !== visibleSess().length;
+  document.querySelectorAll("#sList input").forEach(i => { i.checked = on; on ? checked.add(i.value) : checked.delete(i.value); });
   updateCount();
 };
 
 $("sTransfer").onclick = async () => {
   const from = $("sFrom").value, to = $("sTo").value, picks = sessPicks();
-  if (from === to)     return sessStatus(t("sameProfile"), "bad");
-  if (!picks.length)   return sessStatus(t("pickSome"), "bad");
-  // Writing into another profile is not undoable from here, so it is confirmed first.
-  const ok = await dialog().confirm(
-    t("confirmTransfer").replace("__N__", picks.length).replace("__T__", to),
-    { title: t("sessionsTitle"), kind: "warning" });
+  const toAcct = $("sToAcct").value;
+  if (!picks.length) return sessStatus(t("pickSome"), "bad");
+  if ((from === to || toAccts.length > 1) && !toAcct) { markNeed(); return sessStatus(t("pickAccount"), "bad"); }
+  if (from === to && picks.every(ix => (sess.find(s => String(s.index) === ix) || {}).account === toAcct)) {
+    return sessStatus(t("alreadyThere"), "bad");
+  }
+  // Writing into another account is not undoable from here, so it is confirmed first.
+  const target = toAccts.find(a => a.id === toAcct);
+  const question = target && (from === to || toAccts.length > 1)
+    ? t("confirmTransferAcct").replace("__N__", picks.length).replace("__T__", to).replace("__A__", acctLabel(target))
+    : t("confirmTransfer").replace("__N__", picks.length).replace("__T__", to);
+  const ok = await dialog().confirm(question, { title: t("sessionsTitle"), kind: "warning" });
   if (!ok) return;
   sessStatus(t("transferring"));
   try {
-    const msg = await invoke("transfer_sessions", { from, to, picks: picks.join(",") });
-    sessStatus(`${msg.trim()}\n${t("restartDest")}`.replace(/\n/g, " — "), "good");
+    const msg = await invoke("transfer_sessions", { from, to, picks: picks.join(","), toAccount: toAcct || null });
+    sessStatus(`${msg.trim()}\n${t("restartDest")}`.replace(/\n+/g, " — "), "good");
+    loadSessions(); loadFromAccounts(); loadToAccounts();   // counts changed
   } catch (e) { sessStatus(String(e), "bad"); }
 };
 

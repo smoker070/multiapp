@@ -272,7 +272,7 @@ fn advanced(args: &[&str]) -> Result<String, String> {
         const ALLOWED: &[&str] = &[
             "migrate-list", "backup", "restore", "session-check", "session-backup",
             "session-restore", "app-export", "app-import", "list-installed", "sessions",
-            "transfer", "export", "import", "scan", "probe", "apps", "doctor",
+            "transfer", "accounts", "export", "import", "scan", "probe", "apps", "doctor",
         ];
         let first = args.first().copied().unwrap_or("");
         if !ALLOWED.contains(&first) {
@@ -314,6 +314,48 @@ struct SessionDto {
     date: String,
     cwd: String,
     title: String,
+    /// The account folder this session is filed under, `<id>/<id>`.
+    account: String,
+}
+
+/// `.../claude-code-sessions/<a>/<b>/local_x.json` → `<a>/<b>`
+fn account_of(index_file: &str) -> String {
+    let p = std::path::Path::new(index_file);
+    let b = p.parent();
+    let a = b.and_then(|b| b.parent());
+    match (a.and_then(|a| a.file_name()), b.and_then(|b| b.file_name())) {
+        (Some(a), Some(b)) => format!("{}/{}", a.to_string_lossy(), b.to_string_lossy()),
+        _ => String::new(),
+    }
+}
+
+#[derive(Serialize)]
+struct AccountDto {
+    id: String,
+    sessions: usize,
+    last: String,
+    used_today: bool,
+    titles: String,
+}
+
+/// The account folders a profile keeps sessions in. Claude shows only the signed-in one, so after
+/// switching accounts the old sessions are still on disk — in a folder the app no longer opens.
+#[tauri::command]
+fn claude_accounts(profile: String) -> Result<Vec<AccountDto>, String> {
+    let out = advanced(&["accounts", "claude", &profile, "--raw"])?;
+    Ok(out
+        .lines()
+        .filter_map(|line| {
+            let f: Vec<&str> = line.split('\t').collect();
+            (f.len() >= 5).then(|| AccountDto {
+                id: f[0].to_string(),
+                sessions: f[1].parse().unwrap_or(0),
+                last: f[2].to_string(),
+                used_today: f[3] == "1",
+                titles: f[4].to_string(),
+            })
+        })
+        .collect())
 }
 
 /// Claude Code sessions saved in a profile ("main" is the unprofiled install).
@@ -334,19 +376,31 @@ fn claude_sessions(profile: String) -> Result<Vec<SessionDto>, String> {
                 date: f[2].to_string(),
                 cwd: f[3].to_string(),
                 title: f[4].to_string(),
+                account: account_of(f[0]),
             })
         })
         .collect())
 }
 
-/// Copy sessions from one profile into another as INDEPENDENT copies (new ids, duplicated
-/// transcript). The originals are untouched.
+/// Copy sessions as INDEPENDENT copies (new ids, duplicated transcript). The originals are untouched.
+/// `to_account` names the destination account folder; it is what makes a copy within one install
+/// meaningful, and the CLI refuses a same-install copy without it.
 #[tauri::command]
-fn transfer_sessions(from: String, to: String, picks: String) -> Result<String, String> {
-    if from == to {
-        return Err("source and destination are the same profile".into());
+fn transfer_sessions(
+    from: String,
+    to: String,
+    picks: String,
+    to_account: Option<String>,
+) -> Result<String, String> {
+    let acct = to_account.filter(|a| !a.is_empty());
+    if from == to && acct.is_none() {
+        return Err("choose which account receives the copies".into());
     }
-    advanced(&["transfer", "claude", &from, &to, &picks])
+    let mut args = vec!["transfer", "claude", from.as_str(), to.as_str(), picks.as_str()];
+    if let Some(a) = acct.as_deref() {
+        args.extend(["--to-account", a]);
+    }
+    advanced(&args)
 }
 
 /// Write chosen sessions to an archive that can be carried to another machine.
@@ -477,6 +531,7 @@ fn main() {
             advanced_available,
             run_advanced,
             claude_sessions,
+            claude_accounts,
             transfer_sessions,
             export_sessions,
             import_sessions,
