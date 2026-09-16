@@ -10,6 +10,7 @@ pub mod launch;
 pub mod paths;
 pub mod proc;
 pub mod profile;
+pub mod trash;
 
 pub use error::Error;
 

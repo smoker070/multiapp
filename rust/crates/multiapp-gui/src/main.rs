@@ -5,7 +5,7 @@
 // prompted this program: "when I open it, it works like a terminal — that is unprofessional".
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use multiapp_core::{appdata, archive, launch, paths, profile};
+use multiapp_core::{appdata, archive, launch, paths, profile, trash};
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -511,6 +511,41 @@ fn probe_app(app: String) -> Result<serde_json::Value, String> {
     serde_json::to_value(p).map_err(|e| e.to_string())
 }
 
+/// What is in Multiapp's Trash: deleted profiles, moved-aside sessions, files a restore replaced.
+#[tauri::command]
+fn trash_list() -> Result<Vec<trash::TrashItem>, String> {
+    trash::list().map_err(|e| e.to_string())
+}
+
+/// How many entries are in Trash — cheap, for the header badge. `trash_list` walks every entry to
+/// size it, which on gigabytes of deleted profiles is not something to do on every start.
+#[tauri::command]
+fn trash_count() -> usize {
+    paths::trash_root()
+        .ok()
+        .and_then(|r| std::fs::read_dir(r).ok())
+        .map(|rd| rd.flatten().filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false)).count())
+        .unwrap_or(0)
+}
+
+/// Put a deleted profile back. Refuses when a profile of that name exists again.
+#[tauri::command]
+fn trash_restore(id: String) -> Result<String, String> {
+    trash::restore(&id).map(|p| p.display().to_string()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn trash_reveal(id: String) -> Result<(), String> {
+    trash::reveal(&id).map_err(|e| e.to_string())
+}
+
+/// The only permanent deletion in the app, and only from an explicit, confirmed click.
+#[tauri::command]
+fn trash_empty() -> Result<String, String> {
+    let (n, bytes) = trash::empty().map_err(|e| e.to_string())?;
+    Ok(format!("{n} item(s), {}", human(bytes)))
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -537,6 +572,11 @@ fn main() {
             export_sessions,
             import_sessions,
             session_check,
+            trash_list,
+            trash_count,
+            trash_restore,
+            trash_reveal,
+            trash_empty,
             list_app_data,
             backup_app,
             archive_info,

@@ -59,6 +59,17 @@
   .icon:hover  { color:var(--accent); border-color:var(--accent); transform:translateY(-1px) rotate(-6deg); }
   .icon:active { transform:scale(.92); }
   .icon.spin   { animation:spin .7s linear infinite; }
+  .icon { position:relative; }
+  .badge {
+    position:absolute; top:-6px; right:-6px; min-width:16px; height:16px; padding:0 4px;
+    border-radius:8px; background:var(--accent); color:#fff; font-size:9.5px; font-weight:700;
+    display:grid; place-items:center; line-height:1; pointer-events:none;
+    box-shadow:0 0 0 2px var(--panel); animation:pop .2s var(--ease);
+  }
+  .arow .kind { width:26px; height:26px; border-radius:8px; display:grid; place-items:center; flex:none;
+                background:var(--panel-3); color:var(--muted); font-size:13px; }
+  .arow .kind.profile  { color:var(--accent); }
+  .arow .kind.sessions { color:var(--ok); }
   @keyframes spin { to { transform:rotate(360deg); } }
 
   .toolbar { display:flex; gap:8px; padding:11px 15px 9px; flex:none; }
@@ -216,6 +227,7 @@
     <img src="logo.png" alt="">
     <h1>Multiapp</h1>
     <button class="icon" id="refresh" title="Rescan">↻</button>
+    <button class="icon" id="trashBtn" title="Trash"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg><span class="badge" id="trashBadge" hidden></span></button>
     <button class="icon" id="settings" title="Settings">⚙</button>
   </header>
 
@@ -309,6 +321,21 @@
     </div>
   </div>
 
+  <!-- Trash: every deletion in Multiapp is a move into here, so this is where "what did I delete?"
+       is answered, where a profile comes back, and the only place anything is erased for good. -->
+  <div class="backdrop" id="bdTrash">
+    <div class="modal" style="max-width:440px">
+      <h2 data-i18n="trash">Trash</h2>
+      <div class="note" data-i18n="trashNote"></div>
+      <div id="trashList" style="margin-top:12px"></div>
+      <div class="hint" id="trashStatus"></div>
+      <div class="actions">
+        <button class="btn ghost" id="trashClose" data-i18n="close">Close</button>
+        <button class="btn primary" id="trashEmpty" style="background:var(--danger);box-shadow:none" data-i18n="emptyTrash">Empty Trash</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Claude Code sessions. macOS only, and only when the CLI is installed: the id-minting and
        transcript duplication live there, not in this app. -->
   <div class="backdrop" id="bdSessions">
@@ -396,6 +423,13 @@ const T = {
         confirmImport:"Import sessions from this file into '__T__'?",
         saveSessions:"Export sessions as", chooseSessionFile:"Choose a session archive",
         selected:"selected",
+        trash:"Trash", emptyTrash:"Empty Trash", restore:"Restore", open:"Open",
+        trashNote:"Deleted profiles and sessions wait here. A profile can be restored; emptying the Trash erases everything in it for good.",
+        trashEmptyNow:"The Trash is empty.", readingTrash:"Reading the Trash…",
+        kProfile:"profile", kSessions:"Claude sessions", kReplaced:"files replaced by a restore", kOther:"other",
+        deletedWord:"deleted", unknownApp:"unknown app",
+        emptyConfirm:"Permanently delete __N__ item(s), __S__? This cannot be undone.",
+        emptied:"Deleted permanently:", restoredTo:"Restored to",
         allAccounts:"All accounts", chooseAccount:"Choose account…", sessWord:"sessions", sessWord1:"session", sessWord2:"sessions", lastWord:"last",
         usedToday:"open in Claude now", emptyFolder:"empty",
         accountNote:"Claude shows only the account you are signed into. Sessions from an account you no longer use are still on disk — copy them into the account you use now.",
@@ -442,6 +476,13 @@ const T = {
         confirmImport:"Shu fayldan sessiyalar '__T__' profiliga import qilinsinmi?",
         saveSessions:"Sessiyalarni saqlash", chooseSessionFile:"Sessiya arxivini tanlang",
         selected:"tanlandi",
+        trash:"Savat", emptyTrash:"Savatni tozalash", restore:"Tiklash", open:"Ochish",
+        trashNote:"O‘chirilgan profil va sessiyalar shu yerda turadi. Profilni tiklash mumkin; savatni tozalash ichidagi hamma narsani butunlay o‘chiradi.",
+        trashEmptyNow:"Savat bo‘sh.", readingTrash:"Savat o‘qilmoqda…",
+        kProfile:"profil", kSessions:"Claude sessiyalari", kReplaced:"tiklashda almashtirilgan fayllar", kOther:"boshqa",
+        deletedWord:"o‘chirilgan", unknownApp:"noma’lum ilova",
+        emptyConfirm:"__N__ ta element (__S__) butunlay o‘chirilsinmi? Buni qaytarib bo‘lmaydi.",
+        emptied:"Butunlay o‘chirildi:", restoredTo:"Tiklandi:",
         allAccounts:"Barcha akkauntlar", chooseAccount:"Akkauntni tanlang…", sessWord:"sessiya", sessWord1:"sessiya", sessWord2:"sessiya", lastWord:"oxirgi",
         usedToday:"hozir Claude’da ochiq", emptyFolder:"bo‘sh",
         accountNote:"Claude faqat siz kirgan akkauntni ko‘rsatadi. Endi ishlatmaydigan akkauntdagi sessiyalar diskda turibdi — ularni hozirgi akkauntingizga nusxalang.",
@@ -488,6 +529,13 @@ const T = {
         confirmImport:"Импортировать сессии из этого файла в «__T__»?",
         saveSessions:"Сохранить сессии как", chooseSessionFile:"Выберите архив сессий",
         selected:"выбрано",
+        trash:"Корзина", emptyTrash:"Очистить корзину", restore:"Восстановить", open:"Открыть",
+        trashNote:"Удалённые профили и сессии хранятся здесь. Профиль можно восстановить; очистка корзины удаляет всё навсегда.",
+        trashEmptyNow:"Корзина пуста.", readingTrash:"Чтение корзины…",
+        kProfile:"профиль", kSessions:"сессии Claude", kReplaced:"файлы, заменённые при восстановлении", kOther:"другое",
+        deletedWord:"удалён", unknownApp:"неизвестное приложение",
+        emptyConfirm:"Удалить навсегда __N__ элемент(ов), __S__? Это нельзя отменить.",
+        emptied:"Удалено навсегда:", restoredTo:"Восстановлено в",
         allAccounts:"Все аккаунты", chooseAccount:"Выберите аккаунт…", sessWord:"сессий", sessWord1:"сессия", sessWord2:"сессии", lastWord:"последняя",
         usedToday:"сейчас открыт в Claude", emptyFolder:"пусто",
         accountNote:"Claude показывает только тот аккаунт, в который вы вошли. Сессии аккаунта, которым вы больше не пользуетесь, остались на диске — скопируйте их в текущий аккаунт.",
@@ -701,6 +749,7 @@ $("cOk").onclick = async () => {
   try {
     await invoke("delete_profile", { app: target.app, name: target.name, stamp: stamp() });
     say(`${t("movedTrash")}: ${target.name}`, "ok");
+    updateTrashBadge();
     $("bdConfirm").classList.remove("open");
     refresh();
   } catch (e) { say(e, "err"); $("bdConfirm").classList.remove("open"); }
@@ -1030,6 +1079,83 @@ $("sImport").onclick = async () => {
   } catch (e) { sessStatus(String(e), "bad"); }
 };
 
+/* ---------------------------------------------------------------- trash */
+async function updateTrashBadge() {
+  try {
+    const n = await invoke("trash_count");
+    const b = $("trashBadge");
+    b.textContent = n > 99 ? "99+" : String(n);
+    b.hidden = n === 0;
+  } catch (_) {}
+}
+
+let trashItems = [];
+function trashStatus(msg, kind = "") { const s = $("trashStatus"); s.textContent = msg; s.className = "hint " + kind; }
+
+function trashRow(it, i) {
+  const when = it.deleted_at ? `${t("deletedWord")} ${it.deleted_at}` : "";
+  let icon = "•", title = it.id, bits = [];
+  if (it.kind === "profile") {
+    icon = "◉"; title = `${it.app || t("unknownApp")} · ${it.name || it.id}`; bits = [t("kProfile")];
+  } else if (it.kind === "sessions") {
+    icon = "✦"; title = `${it.sessions} ${t("kSessions")}`;
+    if (it.titles.length) bits = [it.titles.slice(0, 3).join(", ") + (it.sessions > 3 ? "…" : "")];
+  } else if (it.kind === "replaced") {
+    icon = "↺"; title = it.app ? `${t("kReplaced")} · ${it.app}` : t("kReplaced");
+  } else {
+    bits = [t("kOther")];
+  }
+  if (when) bits.push(when);
+  bits.push(human(it.bytes));
+  return `<div class="arow" style="animation-delay:${Math.min(i, 10) * 18}ms">
+      <span class="kind ${esc(it.kind)}">${icon}</span>
+      <span class="n"><b title="${esc(it.id)}">${esc(title)}</b><span>${esc(bits.join(" · "))}</span></span>
+      ${it.restorable ? `<button class="btn ghost" data-restore="${i}">${esc(t("restore"))}</button>` : ""}
+      <button class="btn ghost" data-reveal="${i}">${esc(t("open"))}</button>
+    </div>`;
+}
+
+async function loadTrash() {
+  const box = $("trashList");
+  box.innerHTML = `<div class="note">${esc(t("readingTrash"))}</div>`;
+  try { trashItems = await invoke("trash_list"); }
+  catch (e) { box.innerHTML = `<div class="hint bad">${esc(String(e))}</div>`; return; }
+  $("trashEmpty").disabled = !trashItems.length;
+  if (!trashItems.length) { box.innerHTML = `<div class="note">${esc(t("trashEmptyNow"))}</div>`; updateTrashBadge(); return; }
+  box.innerHTML = trashItems.map(trashRow).join("");
+  box.querySelectorAll("[data-restore]").forEach(b => { b.onclick = () => restoreTrash(trashItems[+b.dataset.restore]); });
+  box.querySelectorAll("[data-reveal]").forEach(b => {
+    b.onclick = () => invoke("trash_reveal", { id: trashItems[+b.dataset.reveal].id }).catch(e => trashStatus(String(e), "bad"));
+  });
+  updateTrashBadge();
+}
+
+async function restoreTrash(it) {
+  try {
+    const to = await invoke("trash_restore", { id: it.id });
+    trashStatus(`${t("restoredTo")} ${to}`, "good");
+    await loadTrash();
+    refresh(true);   // the restored profile belongs back in the main list
+  } catch (e) { trashStatus(String(e), "bad"); }
+}
+
+$("trashBtn").onclick = () => { closeMenus(); trashStatus(""); $("bdTrash").classList.add("open"); loadTrash(); };
+$("trashClose").onclick = () => $("bdTrash").classList.remove("open");
+$("trashEmpty").onclick = async () => {
+  if (!trashItems.length) return;
+  const total = trashItems.reduce((a, it) => a + it.bytes, 0);
+  // The one irreversible action in the app: always confirmed, with what and how much.
+  const ok = await dialog().confirm(
+    t("emptyConfirm").replace("__N__", trashItems.length).replace("__S__", human(total)),
+    { title: t("emptyTrash"), kind: "warning" });
+  if (!ok) return;
+  try {
+    const msg = await invoke("trash_empty");
+    trashStatus(`${t("emptied")} ${msg}`, "good");
+    await loadTrash();
+  } catch (e) { trashStatus(String(e), "bad"); await loadTrash(); }
+};
+
 $("bRescan").onclick = loadApps;
 $("advBtn").onclick = () => { closeMenus(); $("bStatus").textContent = ""; $("bdTools").classList.add("open"); loadApps(); };
 $("tClose").onclick = () => $("bdTools").classList.remove("open");
@@ -1055,6 +1181,7 @@ $("refresh").onclick = () => { $("refresh").classList.add("spin"); refresh().fin
   // Sessions need the macOS CLI. Showing a button that can only ever say "not installed" is worse
   // than not showing it, so the backend is asked first.
   try { $("sessBtn").hidden = !(await invoke("advanced_available")); } catch (_) {}
+  updateTrashBadge();
   try {
     if (!(await invoke("in_start_menu")) && navigator.userAgent.includes("Windows")) $("pin").hidden = false;
   } catch (_) {}

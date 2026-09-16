@@ -184,7 +184,9 @@ pub fn delete_to_trash(app: &str, name: &str, stamp: &str) -> Result<PathBuf, Er
     }
     let trash = paths::trash_root()?;
     std::fs::create_dir_all(&trash)?;
-    let safe = format!("{app}-{name}-{stamp}").replace(['/', '\\', ':'], "-");
+    // <app>__<name>__<stamp>, the same form the bash CLI writes. The old "<app>-<name>-<stamp>"
+    // could not be split back: both halves may contain '-', so a restore could not know the app.
+    let safe = format!("{app}__{name}__{stamp}").replace(['/', '\\', ':'], "-");
     let to = trash.join(safe);
     paths::assert_inside_root(&to)?;
     // A rename across the same volume is atomic and instant; a copy would double the disk use of a

@@ -24,4 +24,8 @@ pub enum Error {
     Running(String),
     #[error("cannot be sure '{0}' is stopped: {1} process(es) could not be inspected")]
     Uncertain(String, usize),
+    #[error("'{0}' is not in the Trash")]
+    NotInTrash(String),
+    #[error("'{0}' cannot be restored automatically — open it and move what you need back by hand")]
+    NotRestorable(String),
 }
