@@ -20,6 +20,10 @@ fi
 echo "— building AppIcon.icns…"
 ICONSET="$BUILD/AppIcon.iconset"
 rm -rf "$BUILD"; mkdir -p "$ICONSET" "$DIST"
+# Keep Spotlight out of the build tree. Without this, every staged copy of Multiapp.app
+# under build/ gets indexed and shows up as its own hit in Spotlight and Launchpad — five
+# identical icons for one app, which is exactly as confusing as it sounds.
+touch "$BUILD/.metadata_never_index"
 for s in 16 32 128 256 512; do
   sips -z $s $s assets/icon_1024.png --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
   d=$((s*2))
@@ -52,9 +56,17 @@ PLIST
 echo "— ad-hoc signing…"
 codesign --force -s - "$APP"
 
-echo "— installing to ~/Applications/Multiapp.app…"
-rm -rf "$HOME/Applications/Multiapp.app"
-cp -R "$APP" "$HOME/Applications/Multiapp.app"
+# The Tauri GUI (com.multiapp.desktop) installs itself as "Multiapp" too. Two different apps
+# under one name and one icon are indistinguishable in Launchpad and Spotlight, so the locally
+# installed menu-bar copy carries a distinct display name. The DMG payload is left alone — it
+# still ships as plain Multiapp.app.
+INSTALLED="$HOME/Applications/Multiapp Menu Bar.app"
+echo "— installing to $INSTALLED…"
+rm -rf "$INSTALLED" "$HOME/Applications/Multiapp.app"
+cp -R "$APP" "$INSTALLED"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleName "Multiapp Menu Bar"' "$INSTALLED/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Add :CFBundleDisplayName string "Multiapp Menu Bar"' "$INSTALLED/Contents/Info.plist" 2>/dev/null || true
+codesign --force -s - "$INSTALLED"   # the plist edit invalidates the signature copied from $APP
 
 # ---------------------------------------------------------------- designed DMG
 echo "— staging DMG…"

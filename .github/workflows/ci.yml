@@ -117,6 +117,11 @@ jobs:
       - name: Build the desktop UI
         run: cargo build --release -p multiapp-gui
 
+      # The window runs under a CSP that drops inline style attributes; this is the test that
+      # keeps them out of the UI. It lives in the GUI crate, which no other job builds.
+      - name: Test the desktop UI
+        run: cargo test -p multiapp-gui
+
       # The bundler is what produces an INSTALLER. A bare .exe is registered nowhere by Windows, so
       # it never lands in the Start Menu; the NSIS installer creates the Start Menu entry, the icon
       # and an uninstaller. Both are shipped: the installer for normal use, the portable exe for

@@ -20,26 +20,113 @@
   }
   * { box-sizing:border-box; }
   html,body { height:100%; margin:0; }
+  /* Sidebar of apps, profiles on the right — the shape OrbStack, TablePlus and Parallels
+     Control Center all converged on, and the reason is that it scales. The single column this
+     replaced put every app, every profile and every tool in one flat list, so the window got
+     louder with each profile instead of better organised. */
   body {
     background:var(--bg); color:var(--text);
     font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
-    display:flex; flex-direction:column; overflow:hidden;
+    display:grid;
+    grid-template-columns:232px minmax(0,1fr);
+    grid-template-rows:auto minmax(0,1fr) auto;
+    overflow:hidden;
     user-select:none; -webkit-user-select:none;
   }
   /* Anyone who has asked the OS to reduce motion gets none of this. */
   @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation:none !important; transition:none !important; } }
 
   header {
+    grid-column:1 / -1;
     display:flex; align-items:center; gap:10px; padding:13px 15px;
-    border-bottom:1px solid var(--line); background:var(--panel); flex:none;
+    border-bottom:1px solid var(--line); background:var(--panel);
   }
   header img { width:26px; height:26px; border-radius:7px; }
   header h1 { font-size:15px; font-weight:650; margin:0; letter-spacing:.2px; flex:1; }
+
+  /* ----------------------------------------------------------------- sidebar */
+  aside {
+    grid-row:2; grid-column:1; min-height:0;
+    display:flex; flex-direction:column; gap:3px; padding:12px 10px;
+    background:var(--panel); border-right:1px solid var(--line);
+  }
+  .search {
+    width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text);
+    border-radius:9px; padding:8px 11px; font:inherit; font-size:12.5px; margin-bottom:12px;
+  }
+  .search:focus { outline:none; border-color:var(--accent); }
+  .navLabel {
+    font-size:10.5px; font-weight:700; letter-spacing:.9px; color:var(--muted);
+    padding:0 9px 7px; text-transform:uppercase;
+  }
+  #appNav { overflow-y:auto; min-height:0; display:flex; flex-direction:column; gap:2px; scrollbar-width:thin; }
+  .nav {
+    display:flex; align-items:center; gap:9px; width:100%; text-align:left;
+    padding:8px 9px; border-radius:9px; border:1px solid transparent;
+    background:transparent; color:var(--text); cursor:pointer; font:inherit;
+    transition:background .14s, color .14s;
+  }
+  .nav:hover { background:var(--panel-2); }
+  .nav.on    { background:var(--panel-3); }
+  .nav .swatch {
+    width:20px; height:20px; border-radius:6px; background:var(--panel-3); flex:none;
+    display:grid; place-items:center; font-size:10px; font-weight:700; color:var(--muted);
+  }
+  .nav.on .swatch { background:var(--accent); color:#fff; }
+  .nav .nm { flex:1; min-width:0; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .nav .ct { font-size:11.5px; color:var(--muted); font-variant-numeric:tabular-nums; flex:none; }
+  .nav .ct.live { color:var(--ok); font-weight:700; }
+  .navFoot { margin-top:auto; padding-top:9px; border-top:1px solid var(--line); display:flex; flex-direction:column; gap:2px; }
+  /* Visible to a screen reader, not on screen — the search field needs a label either way. */
+  /* Picker rows and described actions share one shape: a full-width button with a title and a
+     line of explanation. They are buttons, not links in a list, so Tab and Return work. */
+  .pick, .act {
+    display:flex; align-items:center; gap:12px; width:100%; text-align:left;
+    padding:10px 12px; margin-bottom:7px; border-radius:11px; cursor:pointer; font:inherit;
+    background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+    transition:border-color .16s, background .16s, transform .12s var(--ease);
+  }
+  .pick:hover, .act:hover { border-color:var(--accent); background:var(--panel-3); }
+  .pick:active, .act:active { transform:scale(.99); }
+  .pick:focus-visible, .act:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .pick .tile { width:30px; height:30px; border-radius:9px; flex:none; display:grid; place-items:center;
+                background:var(--panel-3); color:var(--muted); font-size:12px; font-weight:700; }
+  .pick .pn { flex:1; min-width:0; }
+  .pick .pn b, .act b { display:block; font-size:13px; font-weight:600;
+                        white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .pick .pn span, .act span { display:block; margin-top:2px; color:var(--muted); font-size:11.5px; line-height:1.4; }
+  .pick .go { color:var(--muted); flex:none; font-size:15px; }
+  .act { display:block; }
+  .acts { margin-top:12px; }
+  /* CLI output, shown verbatim. Selectable because the whole point is to copy it into a bug
+     report, and scrollable both ways because a path is as long as it is. */
+  .report {
+    margin:0 0 10px; padding:10px 11px; max-height:220px; overflow:auto;
+    background:var(--bg); border:1px solid var(--line); border-radius:9px;
+    font:11.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    color:var(--text); user-select:text; -webkit-user-select:text;
+    /* Wrap rather than scroll sideways: the long lines here are filesystem paths, and a
+       report you have to drag horizontally to read is a report nobody reads. */
+    white-space:pre-wrap; overflow-wrap:anywhere;
+  }
+  .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+
+  /* ----------------------------------------------------------------- main header */
+  .mainHead { display:flex; align-items:flex-start; gap:11px; padding:17px 16px 13px; }
+  .mainHead .ttl { flex:1; min-width:0; }
+  .mainHead h2 { margin:0 0 4px; font-size:18px; font-weight:680; letter-spacing:-.2px;
+                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .mainHead .sub { font-size:12.5px; color:var(--muted); }
 
   button { font-family:inherit; }
   .btn {
     border-radius:9px; border:1px solid transparent; cursor:pointer;
     font-size:13px; font-weight:600; padding:9px 14px;
+    /* A button is as wide as its own label. The previous rule fixed the padding and let the row
+       squeeze the box, so "Остановить" and "Переименовать" spilled over their own borders the
+       moment the language changed — the labels were never the problem, the fixed box was. */
+    white-space:nowrap; flex:none; max-width:100%;
+    overflow:hidden; text-overflow:ellipsis;
     transition:transform .12s var(--ease), background .16s, border-color .16s, box-shadow .16s, color .16s;
   }
   .btn:hover  { transform:translateY(-1px); }
@@ -56,8 +143,10 @@
     display:grid; place-items:center; flex:none;
     transition:transform .12s var(--ease), color .16s, border-color .16s, background .16s;
   }
-  .icon:hover  { color:var(--accent); border-color:var(--accent); transform:translateY(-1px) rotate(-6deg); }
-  .icon:active { transform:scale(.92); }
+  /* No rotation. A control that tilts when the pointer nears it reads as a toy, not a tool —
+     and a 6deg turn on a 31px square is the single thing people named first about this window. */
+  .icon:hover  { color:var(--accent); border-color:var(--accent); background:var(--panel-2); }
+  .icon:active { transform:scale(.96); }
   .icon.spin   { animation:spin .7s linear infinite; }
   .icon { position:relative; }
   .badge {
@@ -72,26 +161,44 @@
   .arow .kind.sessions { color:var(--ok); }
   @keyframes spin { to { transform:rotate(360deg); } }
 
-  .toolbar { display:flex; gap:8px; padding:11px 15px 9px; flex:none; }
-  .toolbar .primary { flex:1; }
+  /* Only the list scrolls. The app name, the counts and the two actions belong to the pane, not
+     to the list, so they stay put while you scroll through forty profiles. */
+  main { grid-row:2; grid-column:2; min-height:0; display:flex; flex-direction:column; }
+  #list { flex:1; min-height:0; overflow-y:auto; padding:0 16px 14px; scrollbar-width:thin; }
+  #list::-webkit-scrollbar, #appNav::-webkit-scrollbar { width:9px; }
+  #list::-webkit-scrollbar-thumb, #appNav::-webkit-scrollbar-thumb {
+    background:var(--panel-3); border-radius:9px; border:3px solid var(--bg);
+  }
 
-  main { flex:1; overflow-y:auto; padding:0 15px 12px; scrollbar-width:thin; }
-  main::-webkit-scrollbar { width:9px; }
-  main::-webkit-scrollbar-thumb { background:var(--panel-3); border-radius:9px; border:3px solid var(--bg); }
-
+  /* 15px of gap and 15px of padding, against the 10/10 this replaced. The complaint was that the
+     controls sat on top of each other; the fix is partly space, but mostly that a row now carries
+     ONE primary action plus an overflow menu instead of five buttons of equal weight. */
   .row {
-    display:flex; align-items:center; gap:10px; padding:10px 11px; margin-bottom:8px;
-    background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
+    display:flex; align-items:center; gap:15px; padding:14px 15px; margin-bottom:9px;
+    background:var(--panel); border:1px solid var(--line); border-radius:13px;
     transition:border-color .16s, transform .14s var(--ease), box-shadow .16s;
   }
   .row:hover { border-color:var(--panel-3); transform:translateY(-1px); box-shadow:0 6px 18px -12px rgba(0,0,0,.7); }
+  .row .tile {
+    width:36px; height:36px; border-radius:11px; flex:none;
+    background:var(--panel-3); color:var(--muted);
+    display:grid; place-items:center; font-size:14px; font-weight:700;
+  }
+  .row.live .tile { background:var(--accent); color:#fff; }
   /* Only rows that are genuinely new animate in. The list is polled every few seconds to keep the
      running state honest, and replaying the entrance on every poll made the whole list flicker. */
   .row.fresh { animation:rise .26s var(--ease) both; }
   @keyframes rise { from { opacity:0; transform:translateY(7px); } to { opacity:1; transform:none; } }
   .row .meta { flex:1; min-width:0; }
   .row .app  { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .row .sub  { color:var(--muted); font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  /* The status dot now sits with the word it qualifies, instead of floating at the row's edge
+     where it was a coloured speck you had to learn the meaning of. */
+  .row .sub  { color:var(--muted); font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+               display:flex; align-items:center; gap:6px; margin-top:3px; }
+  .row.live .sub { color:var(--ok); font-weight:600; }
+  /* The size is secondary to the state, so it does not take the running colour with it. */
+  .row .sep, .row .psz { color:var(--muted); font-weight:400; }
+  .row .psz { font-variant-numeric:tabular-nums; }
   .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); flex:none; transition:background .2s; }
   .dot.run { background:var(--ok); animation:pulse 2.2s ease-in-out infinite; }
   .dot.unknown { background:var(--warn); }
@@ -101,6 +208,16 @@
   }
   .row .btn { padding:6px 12px; font-size:12px; }
   .stop { background:transparent; color:var(--danger); border-color:var(--danger); }
+
+  /* A row's action is quiet until you are on the row.
+     Every stopped profile offering a solid accent button meant a list of six was six competing
+     calls to action and no hierarchy — the "wall of buttons" look. The action still reads as a
+     button at rest; it only takes the accent once the row is hovered or the button is focused,
+     which is the moment it is actually a choice. Keyboard users get it from :focus-within. */
+  .row .btn.primary { background:var(--panel-2); color:var(--text); border-color:var(--line); box-shadow:none; }
+  .row:hover .btn.primary,
+  .row:focus-within .btn.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .row .btn.primary:focus-visible { background:var(--accent); color:#fff; border-color:var(--accent); }
   .stop:hover { background:var(--danger); color:#fff; }
 
   /* The row menu lives at BODY level, not inside the row.
@@ -130,8 +247,9 @@
   .empty b { display:block; color:var(--text); margin-bottom:6px; font-size:14px; }
 
   footer {
+    grid-column:1 / -1;
     border-top:1px solid var(--line); padding:8px 15px; font-size:11px; color:var(--muted);
-    display:flex; gap:8px; align-items:center; background:var(--panel); flex:none;
+    display:flex; gap:8px; align-items:center; background:var(--panel);
   }
   #status { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; transition:color .2s; }
   #status.err { color:var(--danger); } #status.ok { color:var(--ok); }
@@ -140,18 +258,46 @@
          transition:color .16s, border-color .16s, transform .12s var(--ease); }
   .pin:hover { color:var(--accent); border-color:var(--accent); transform:translateY(-1px); }
 
+  /* Opens AND closes with the same motion.
+     This was `display:none` plus an entrance keyframe: the sheet appeared with a flicker and
+     vanished instantly, blur and all. A dialog that only animates one way reads as a glitch.
+     visibility is transitioned with a delay so the sheet stays hittable until the fade finishes. */
   .backdrop {
-    position:fixed; inset:0; background:rgba(0,0,0,.5); backdrop-filter:blur(3px);
-    display:none; align-items:center; justify-content:center; padding:18px; z-index:60;
-    animation:fade .16s ease both;
+    position:fixed; inset:0; background:rgba(0,0,0,0); backdrop-filter:blur(0px);
+    display:flex; align-items:center; justify-content:center; padding:18px; z-index:60;
+    opacity:0; visibility:hidden; pointer-events:none;
+    transition:opacity .26s ease, background .26s ease, backdrop-filter .26s ease,
+               visibility 0s linear .26s;
+  }
+  .backdrop.open {
+    opacity:1; visibility:visible; pointer-events:auto;
+    background:rgba(0,0,0,.5); backdrop-filter:blur(7px);
+    transition:opacity .26s ease, background .26s ease, backdrop-filter .26s ease,
+               visibility 0s linear 0s;
   }
   .backdrop.open { display:flex; }
   @keyframes fade { from { opacity:0; } to { opacity:1; } }
   .modal {
     background:var(--panel); border:1px solid var(--line); border-radius:15px;
     padding:17px; width:100%; max-width:352px; box-shadow:var(--shadow);
-    animation:zoom .2s var(--ease) both; max-height:88vh; overflow-y:auto;
+    max-height:88vh; overflow-y:auto; position:relative;
+    opacity:0; transform:translateY(10px) scale(.975);
+    transition:opacity .26s ease, transform .26s var(--ease);
   }
+  .backdrop.open .modal { opacity:1; transform:none; }
+
+  /* A way out that is always visible. Every sheet has a Close button in its actions row, but a
+     tall sheet scrolls it off the bottom, so the only exit people found was clicking outside. */
+  .modal .x {
+    position:absolute; top:11px; right:11px; width:28px; height:28px; border-radius:8px;
+    display:grid; place-items:center; cursor:pointer; z-index:2;
+    background:transparent; border:1px solid transparent; color:var(--muted);
+    font:inherit; font-size:15px; line-height:1;
+    transition:background .16s, color .16s, border-color .16s;
+  }
+  .modal .x:hover { background:var(--panel-2); color:var(--text); border-color:var(--line); }
+  .modal .x:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .modal h2 { padding-right:34px; }
   @keyframes zoom { from { opacity:0; transform:scale(.95) translateY(8px); } to { opacity:1; transform:none; } }
   .modal h2 { margin:0 0 13px; font-size:14px; text-align:center; }
   label { display:block; font-size:11px; color:var(--muted); margin:11px 0 5px; }
@@ -184,16 +330,26 @@
   .adv .grid { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
   .adv .grid .btn { padding:8px 6px; font-size:12px; font-weight:600; }
   .note { font-size:11px; color:var(--muted); line-height:1.5; margin-top:9px; }
+  /* The actions WRAP. Two buttons (Trash rows) stay on the name's line; four (the backup rows)
+     drop to a second line instead of crushing the name. Without wrapping, `.n` was squeezed to a
+     few pixels and its description rendered one word per line, behind the buttons. */
   .arow {
-    display:flex; align-items:center; gap:9px; padding:9px 10px; margin-bottom:7px;
-    background:var(--panel-2); border:1px solid var(--line); border-radius:10px;
+    display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:11px 12px; margin-bottom:8px;
+    background:var(--panel-2); border:1px solid var(--line); border-radius:11px;
     animation:rise .22s var(--ease) both; transition:border-color .16s;
   }
   .arow:hover { border-color:var(--panel-3); }
-  .arow .n { flex:1; min-width:0; }
-  .arow .n b { display:block; font-size:12.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .arow .n span { color:var(--muted); font-size:11px; }
-  .arow .btn { padding:5px 9px; font-size:11px; }
+  /* The name owns the first line; every action shares the second. Letting them compete for one
+     line is what produced the unreadable row, and it would come back the moment a label got
+     longer in another language. */
+  .arow .n { flex:1 1 100%; min-width:0; }
+  .arow .n b { display:block; font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  /* Direct child only. `.arow .n span` also matched the nested size span and turned it into a
+     block, which is what split "local web data ·" and "116.9 MB" onto separate lines. */
+  .arow .n > span { display:block; margin-top:2px; color:var(--muted); font-size:11.5px;
+                    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .arow .n .sz { display:inline; }
+  .arow .btn { padding:6px 11px; font-size:11.5px; }
   /* session picker */
   .xfer { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
   @media (max-width:520px) { .xfer { grid-template-columns:1fr; } }
@@ -220,24 +376,81 @@
     font-size:11px; max-height:230px; overflow:auto; white-space:pre-wrap; word-break:break-word;
     user-select:text; margin:0;
   }
+  /* ------------------------------------------------------------------ no inline styles
+     Everything below used to be an inline style attribute. The packaged app runs under a
+     Content-Security-Policy that carries a nonce for the stylesheet, and a nonce makes the
+     browser ignore 'unsafe-inline' — so every style attribute was silently dropped in the real
+     window while rendering perfectly in a plain browser. Sheets came out at the base width,
+     the Delete buttons were not red, icon tiles kept their background. Classes are not optional
+     here; a test in main.rs fails the build if a style attribute comes back. */
+  .swatch.bare { background:none; }
+  .inline-row { display:flex; gap:7px; align-items:center; margin-top:6px; }
+  .grow0 { flex:1; margin:0; }
+  .btn.small { padding:5px 10px; font-size:11px; }
+  .btn.danger, .btn.danger:hover { background:var(--danger); border-color:var(--danger); box-shadow:none; color:#fff; }
+  .modal.mid  { max-width:440px; }
+  .modal.wide { max-width:500px; }
+  .selectable { user-select:text; -webkit-user-select:text; }
+  .tight-actions { margin:0 0 8px; }
+  .mt12 { margin-top:12px; }
+  .center { text-align:center; }
+  .between { display:flex; align-items:center; justify-content:space-between; margin-top:11px; }
+  .m0 { margin:0; }
+  .m6 { margin:6px; }
+
+  /* Narrow window: the sidebar is the first thing to go, not the content.
+     This block lives at the END of the stylesheet on purpose. A media query carries no extra
+     specificity, so while it sat above `aside { display:flex }` the plain rule won on source
+     order and the breakpoint silently did nothing — the sidebar stayed put at every width. */
+  @media (max-width:560px) {
+    body { grid-template-columns:minmax(0,1fr); }
+    aside { display:none; }
+    /* main is pinned to column 2 for the two-column layout. Leaving it pinned here put it in an
+       IMPLICIT third track and left the empty explicit column showing as a dead strip down the
+       side of the window — which is exactly what the app did on first launch. */
+    main { grid-column:1; }
+  }
 </style>
 </head>
 <body>
   <header>
     <img src="logo.png" alt="">
     <h1>Multiapp</h1>
+    <!-- Trash and Settings moved into the sidebar's foot, where they are named rather than
+         guessed at from a glyph. Only Rescan stays here: it acts on the window, not on a list. -->
     <button class="icon" id="refresh" title="Rescan">↻</button>
-    <button class="icon" id="trashBtn" title="Trash"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg><span class="badge" id="trashBadge" hidden></span></button>
-    <button class="icon" id="settings" title="Settings">⚙</button>
   </header>
 
-  <div class="toolbar">
-    <button class="btn primary" id="new" data-i18n="newProfile">New Profile</button>
-    <button class="btn ghost" id="advBtn" data-i18n="tools">Tools</button>
-    <button class="btn ghost" id="sessBtn" data-i18n="sessions" hidden>Sessions</button>
-  </div>
+  <aside>
+    <label class="sr" for="q" data-i18n="searchLabel">Search apps and profiles</label>
+    <input class="search" id="q" type="search" autocomplete="off" placeholder="Search">
+    <div class="navLabel" data-i18n="apps">Apps</div>
+    <div id="appNav"></div>
+    <div class="navFoot">
+      <button class="nav" id="trashBtn">
+        <svg class="swatch bare" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13"/></svg>
+        <span class="nm" data-i18n="trash">Trash</span>
+        <span class="ct" id="trashBadge" hidden></span>
+      </button>
+      <button class="nav" id="settings">
+        <svg class="swatch bare" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="nm" data-i18n="settings">Settings</span>
+      </button>
+    </div>
+  </aside>
 
-  <main id="list"></main>
+  <main>
+    <div class="mainHead">
+      <div class="ttl">
+        <h2 id="paneTitle">Multiapp</h2>
+        <div class="sub" id="paneSub"></div>
+      </div>
+      <button class="btn ghost" id="advBtn" data-i18n="tools">Tools</button>
+      <button class="btn ghost" id="sessBtn" data-i18n="sessions">Sessions</button>
+      <button class="btn primary" id="new" data-i18n="newProfile">New Profile</button>
+    </div>
+    <div id="list"></div>
+  </main>
 
   <footer>
     <span id="status">…</span>
@@ -260,9 +473,9 @@
         <label for="app" data-i18n="application">Application</label>
         <input id="app" list="apps" placeholder="Microsoft Edge" autocomplete="off">
         <datalist id="apps"></datalist>
-        <div style="display:flex;gap:7px;align-items:center;margin-top:6px">
-          <div class="hint" id="appHint" style="flex:1;margin:0"></div>
-          <button class="btn ghost" id="probeBtn" style="padding:5px 10px;font-size:11px" data-i18n="probe">Test</button>
+        <div class="inline-row">
+          <div class="hint grow0" id="appHint"></div>
+          <button class="btn ghost small" id="probeBtn" data-i18n="probe">Test</button>
         </div>
       </div>
       <label for="pname" data-i18n="profileName">Profile name</label>
@@ -281,13 +494,13 @@
       <div class="note" id="cBody"></div>
       <div class="actions">
         <button class="btn ghost" id="cCancel" data-i18n="cancel">Cancel</button>
-        <button class="btn primary" id="cOk" style="background:var(--danger);box-shadow:none" data-i18n="delete">Delete</button>
+        <button class="btn primary danger" id="cOk" data-i18n="delete">Delete</button>
       </div>
     </div>
   </div>
 
   <div class="backdrop" id="bdSettings">
-    <div class="modal">
+    <div class="modal mid">
       <h2 data-i18n="settings">Settings</h2>
       <label data-i18n="theme">Theme</label>
       <div class="seg" id="themeSeg">
@@ -302,36 +515,89 @@
         <button data-v="ru">Русский</button>
       </div>
       <label data-i18n="storage">Profile storage</label>
-      <div class="note" id="rootPath" style="user-select:text"></div>
+      <div class="note selectable" id="rootPath"></div>
+      <!-- Diagnostics. `doctor` is on the CLI's allowlist, reads only, and changes nothing — it
+           is the thing to run before reporting a bug, and the output is meant to be copied. -->
+      <div id="docRow" hidden>
+        <label data-i18n="diagnostics">Diagnostics</label>
+        <div class="actions tight-actions">
+          <button class="btn ghost" id="docRun" data-i18n="runDoctor">Run check</button>
+        </div>
+        <pre class="report" id="docOut" hidden></pre>
+      </div>
       <div class="actions"><button class="btn ghost" id="sClose" data-i18n="close">Close</button></div>
     </div>
   </div>
 
   <div class="backdrop" id="bdTools">
-    <div class="modal" style="max-width:400px">
+    <div class="modal wide">
       <h2 data-i18n="backupRestore">Backup &amp; Restore</h2>
       <div class="note" data-i18n="backupNote"></div>
-      <div class="actions" style="margin-top:12px">
+      <div class="actions mt12">
         <button class="btn ghost" id="bRestore" data-i18n="restoreFrom">Restore from file…</button>
         <button class="btn ghost" id="bRescan" data-i18n="rescan">Rescan</button>
       </div>
-      <div id="appList" style="margin-top:12px"></div>
+      <div id="appList" class="mt12"></div>
       <div class="hint" id="bStatus"></div>
       <div class="actions"><button class="btn ghost" id="tClose" data-i18n="close">Close</button></div>
+    </div>
+  </div>
+
+  <!-- Sessions, step one: which app. Only applications that are installed AND hold a session
+       are listed; a data folder whose app has been uninstalled is not an app with a session. -->
+  <div class="backdrop" id="bdSessApps">
+    <div class="modal mid">
+      <h2 data-i18n="sessions">Sessions</h2>
+      <div class="note" data-i18n="sessPickNote"></div>
+      <div id="sessAppList" class="mt12"></div>
+      <div class="actions"><button class="btn ghost" id="spClose" data-i18n="close">Close</button></div>
+    </div>
+  </div>
+
+  <!-- Sessions, step two: what can be done with the chosen app's session. Every action carries a
+       sentence saying what it does — a row of bare verbs is what made the Tools sheet a guess. -->
+  <div class="backdrop" id="bdSessApp">
+    <div class="modal mid">
+      <h2 id="saTitle"></h2>
+      <div class="note center" id="saSub"></div>
+      <div class="acts">
+        <button class="act" id="saClaude"><b data-i18n="saClaudeT"></b><span data-i18n="saClaudeD"></span></button>
+        <button class="act" id="saBackup"><b data-i18n="saBackupT"></b><span data-i18n="saBackupD"></span></button>
+        <button class="act" id="saRestore"><b data-i18n="saRestoreT"></b><span data-i18n="saRestoreD"></span></button>
+        <button class="act" id="saSaved"><b data-i18n="whatsSaved"></b><span data-i18n="saSavedD"></span></button>
+        <button class="act" id="saSites"><b data-i18n="sites"></b><span data-i18n="saSitesD"></span></button>
+      </div>
+      <div class="hint" id="saStatus"></div>
+      <div class="actions">
+        <button class="btn ghost" id="saBack">‹ <span data-i18n="allApps">All apps</span></button>
+        <button class="btn ghost" id="saClose" data-i18n="close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- The CLI's session-check report, verbatim. Shown as preformatted text, never parsed into
+       markup: it describes files on disk and a wrong reading would be a claim about someone's
+       login. The button that opens it is hidden unless the CLI is actually installed. -->
+  <div class="backdrop" id="bdSaved">
+    <div class="modal mid">
+      <h2><span data-i18n="whatsSaved">What's saved</span> — <span id="savedTitle"></span></h2>
+      <pre class="report" id="savedBody"></pre>
+      <div class="note" data-i18n="savedNote"></div>
+      <div class="actions"><button class="btn ghost" id="savedClose" data-i18n="close">Close</button></div>
     </div>
   </div>
 
   <!-- Trash: every deletion in Multiapp is a move into here, so this is where "what did I delete?"
        is answered, where a profile comes back, and the only place anything is erased for good. -->
   <div class="backdrop" id="bdTrash">
-    <div class="modal" style="max-width:440px">
+    <div class="modal mid">
       <h2 data-i18n="trash">Trash</h2>
       <div class="note" data-i18n="trashNote"></div>
-      <div id="trashList" style="margin-top:12px"></div>
+      <div id="trashList" class="mt12"></div>
       <div class="hint" id="trashStatus"></div>
       <div class="actions">
         <button class="btn ghost" id="trashClose" data-i18n="close">Close</button>
-        <button class="btn primary" id="trashEmpty" style="background:var(--danger);box-shadow:none" data-i18n="emptyTrash">Empty Trash</button>
+        <button class="btn primary danger" id="trashEmpty" data-i18n="emptyTrash">Empty Trash</button>
       </div>
     </div>
   </div>
@@ -339,9 +605,10 @@
   <!-- Claude Code sessions. macOS only, and only when the CLI is installed: the id-minting and
        transcript duplication live there, not in this app. -->
   <div class="backdrop" id="bdSessions">
-    <div class="modal" style="max-width:430px">
+    <div class="modal mid">
       <h2 data-i18n="sessionsTitle">Claude Code sessions</h2>
       <div class="note" data-i18n="sessionsNote"></div>
+      <div class="note" data-i18n="onlyClaude"></div>
       <!-- Profile AND account on each side. One install can hold several account folders, and
            Claude shows only the signed-in one — so "main → main" is a real transfer, between them. -->
       <div class="xfer">
@@ -357,8 +624,8 @@
         </div>
       </div>
       <div class="note" id="sAcctNote" data-i18n="accountNote"></div>
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:11px">
-        <label style="margin:0" id="sCount"></label>
+      <div class="between">
+        <label class="m0" id="sCount"></label>
         <button class="linkbtn" id="sAll" data-i18n="selectAll">Select all</button>
       </div>
       <div class="slist" id="sList"></div>
@@ -398,9 +665,27 @@ const T = {
         profiles:"profiles", profile:"profile", appData:"App data & logins",
         whatCanBackup:"What can be backed up", installedApps:"Installed apps",
         claudeSessions:"Claude sessions", compat:"Compatibility",
+        onlyClaude:"Moving conversations works for Claude Code only. For any other app, Sessions lets you back up and restore its login instead.",
         toolsNote:"Backup, restore, export and session transfer are macOS-only for now: they are built on the Keychain and on macOS app layouts, and the Windows equivalents have not been researched yet.",
         toolsMissing:"Install the command-line tool to enable these (run ./multiapp install-stub once).",
-        sites:"Sites", probe:"Test", probing:"Testing — an app window will open briefly…",
+        whatsSaved:"What's saved", checking:"Checking…", nothingSaved:"Nothing reported.",
+        savedHint:"The full report: which files hold this app's session, and whether that login would survive a move to another Mac.",
+        savedNote:"Host names and file names only. Cookie values are never read, and nothing in the Keychain is touched.",
+        diagnostics:"Diagnostics", runDoctor:"Run check",
+        sessPickNote:"Apps installed on this computer that keep a login session. Choose one.",
+        sessNone:"No installed app with a saved session was found.",
+        saBackupT:"Back up this session", saBackupD:"Save only the files that carry the login to a .zip. Treat that file like a password.",
+        saRestoreT:"Restore a session", saRestoreD:"Write a saved session back. It merges; anything it replaces is kept in Multiapp's Trash.",
+        saSavedD:"Which files hold the session, and whether it would survive a move to another Mac.",
+        saSitesD:"Which websites the cookies belong to. Host names only.",
+        saClaudeT:"Claude Code conversations", saClaudeD:"Copy conversations between profiles and accounts.",
+        wrongArchive:"That archive belongs to a different app, so nothing was restored:",
+        search:"Search", allApps:"All apps", apps:"Apps", searchLabel:"Search apps and profiles",
+        noMatch:"Nothing matches", noMatchBody:"No app or profile matches what you typed.",
+        moreActions:"More actions",
+        sites:"Sites in backup", measuring:"measuring…",
+        sitesHint:"Which websites this app's cookies belong to. Host names only — Multiapp never reads cookie values, so it cannot tell you whether you are signed in.",
+        probe:"Test", probing:"Testing — an app window will open briefly…",
         probeYes:"This app honours the flag — profiles will work", probeNo:"This app ignored the flag — it sets its own data directory, so profiles will not isolate it",
         probeLeft:"the test instance is still open; close it yourself", cookiesIn:"cookies across",
         siteHint:"Whose cookies these are is what tells you whether a login is involved.",
@@ -451,9 +736,27 @@ const T = {
         profiles:"profil", profile:"profil", appData:"Ilova ma’lumotlari va loginlar",
         whatCanBackup:"Nimani saqlash mumkin", installedApps:"O‘rnatilgan ilovalar",
         claudeSessions:"Claude sessiyalari", compat:"Moslik",
+        onlyClaude:"Suhbatlarni koʻchirish faqat Claude Code uchun ishlaydi. Boshqa ilovalar uchun Sessiyalar boʻlimida loginni zaxiralash va tiklash mumkin.",
         toolsNote:"Zaxiralash, tiklash, eksport va sessiya ko‘chirish hozircha faqat macOS uchun: ular Keychain va macOS ilova tuzilishiga asoslangan, Windows uchun ekvivalenti hali o‘rganilmagan.",
         toolsMissing:"Bularni yoqish uchun buyruq qatori vositasini o‘rnating (bir marta ./multiapp install-stub).",
-        sites:"Saytlar", probe:"Sinash", probing:"Sinalmoqda — ilova oynasi qisqa vaqt ochiladi…",
+        whatsSaved:"Nima saqlangan", checking:"Tekshirilmoqda…", nothingSaved:"Hech narsa topilmadi.",
+        savedHint:"Toʻliq hisobot: bu ilovaning sessiyasi qaysi fayllarda va u login boshqa Mac'ga koʻchirilganda ishlaydimi.",
+        savedNote:"Faqat sayt va fayl nomlari. Cookie qiymatlari hech qachon oʻqilmaydi, Keychain'ga tegilmaydi.",
+        diagnostics:"Diagnostika", runDoctor:"Tekshirish",
+        sessPickNote:"Shu kompyuterga oʻrnatilgan va login sessiyasini saqlaydigan ilovalar. Birini tanlang.",
+        sessNone:"Sessiyasi saqlangan oʻrnatilgan ilova topilmadi.",
+        saBackupT:"Sessiyani zaxiralash", saBackupD:"Faqat login fayllarini .zip ga saqlaydi. Bu faylni parol kabi asrang.",
+        saRestoreT:"Sessiyani tiklash", saRestoreD:"Saqlangan sessiyani qaytaradi. Birlashtiradi; almashtirilgan fayllar Multiapp savatida qoladi.",
+        saSavedD:"Sessiya qaysi fayllarda va boshqa Mac'ga koʻchirilganda ishlaydimi.",
+        saSitesD:"Cookie'lar qaysi saytlarga tegishli. Faqat sayt nomlari.",
+        saClaudeT:"Claude Code suhbatlari", saClaudeD:"Suhbatlarni profillar va akkauntlar orasida nusxalash.",
+        wrongArchive:"Bu arxiv boshqa ilovaga tegishli, shuning uchun hech narsa tiklanmadi:",
+        search:"Qidirish", allApps:"Barcha ilovalar", apps:"Ilovalar", searchLabel:"Ilova va profillarni qidirish",
+        noMatch:"Hech narsa topilmadi", noMatchBody:"Siz yozgan narsaga mos ilova yoki profil yoʻq.",
+        moreActions:"Boshqa amallar",
+        sites:"Arxivdagi saytlar", measuring:"oʻlchanmoqda…",
+        sitesHint:"Bu ilovaning cookie'lari qaysi saytlarga tegishli. Faqat sayt nomlari — Multiapp cookie qiymatlarini hech qachon oʻqimaydi, shuning uchun tizimga kirgan-kirmaganingizni ayta olmaydi.",
+        probe:"Sinash", probing:"Sinalmoqda — ilova oynasi qisqa vaqt ochiladi…",
         probeYes:"Bu ilova flagni qabul qiladi — profillar ishlaydi", probeNo:"Bu ilova flagni e’tiborsiz qoldirdi — o‘z papkasini o‘zi belgilaydi, shuning uchun profillar ajratmaydi",
         probeLeft:"sinov nusxasi hali ochiq; uni o‘zingiz yoping", cookiesIn:"cookie,",
         siteHint:"Cookie’lar kimga tegishli ekani login bor-yo‘qligini ko‘rsatadi.",
@@ -504,9 +807,27 @@ const T = {
         profiles:"профилей", profile:"профиль", appData:"Данные приложений и входы",
         whatCanBackup:"Что можно сохранить", installedApps:"Установленные приложения",
         claudeSessions:"Сессии Claude", compat:"Совместимость",
+        onlyClaude:"Перенос разговоров работает только для Claude Code. Для остальных приложений в разделе «Сессии» можно сохранить и восстановить вход.",
         toolsNote:"Резервное копирование, восстановление, экспорт и перенос сессий пока только для macOS: они построены на Keychain и структуре приложений macOS, а эквиваленты для Windows ещё не исследованы.",
         toolsMissing:"Установите инструмент командной строки, чтобы включить это (один раз ./multiapp install-stub).",
-        sites:"Сайты", probe:"Проверить", probing:"Проверка — окно приложения откроется ненадолго…",
+        whatsSaved:"Что сохранено", checking:"Проверка…", nothingSaved:"Ничего не найдено.",
+        savedHint:"Полный отчёт: в каких файлах лежит сессия приложения и переживёт ли этот вход переезд на другой Mac.",
+        savedNote:"Только имена сайтов и файлов. Значения cookie не читаются, Keychain не затрагивается.",
+        diagnostics:"Диагностика", runDoctor:"Проверить",
+        sessPickNote:"Установленные на этом компьютере приложения, которые хранят сессию входа. Выберите одно.",
+        sessNone:"Установленных приложений с сохранённой сессией не найдено.",
+        saBackupT:"Сохранить эту сессию", saBackupD:"Сохраняет в .zip только файлы входа. Храните этот файл как пароль.",
+        saRestoreT:"Восстановить сессию", saRestoreD:"Возвращает сохранённую сессию. Объединяет; всё заменённое остаётся в корзине Multiapp.",
+        saSavedD:"В каких файлах лежит сессия и переживёт ли она переезд на другой Mac.",
+        saSitesD:"Каким сайтам принадлежат cookie. Только имена сайтов.",
+        saClaudeT:"Разговоры Claude Code", saClaudeD:"Копирование разговоров между профилями и аккаунтами.",
+        wrongArchive:"Этот архив принадлежит другому приложению, поэтому ничего не восстановлено:",
+        search:"Поиск", allApps:"Все приложения", apps:"Приложения", searchLabel:"Поиск приложений и профилей",
+        noMatch:"Ничего не найдено", noMatchBody:"Нет приложения или профиля, подходящего под запрос.",
+        moreActions:"Ещё действия",
+        sites:"Сайты в копии", measuring:"измерение…",
+        sitesHint:"Каким сайтам принадлежат cookie этого приложения. Только имена сайтов — Multiapp никогда не читает значения cookie и не может сказать, вошли ли вы.",
+        probe:"\u041f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c", probing:"Проверка — окно приложения откроется ненадолго…",
         probeYes:"Приложение принимает флаг — профили будут работать", probeNo:"Приложение проигнорировало флаг — оно задаёт свою папку данных, поэтому профили его не изолируют",
         probeLeft:"тестовая копия ещё открыта; закройте её сами", cookiesIn:"куки в",
         siteHint:"Кому принадлежат куки — вот что показывает, есть ли вход.",
@@ -548,6 +869,8 @@ const t = k => (T[lang] && T[lang][k]) || T.en[k] || k;
 function applyLang() {
   document.documentElement.lang = lang;
   document.querySelectorAll("[data-i18n]").forEach(e => { e.textContent = t(e.dataset.i18n); });
+  // A placeholder is an attribute, not text, so the sweep above cannot reach it.
+  $("q").placeholder = t("search");
   render();   // same data, new words: render() animates nothing because the keys are unchanged
 }
 
@@ -573,6 +896,11 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () 
 });
 
 /* ---------------------------------------------------------------- helpers */
+// Entrance stagger for generated rows. Set through the CSSOM because a style attribute in
+// generated markup is dropped by the app's CSP; a property assignment is not.
+function stagger(root, sel, stepMs, cap) {
+  root.querySelectorAll(sel).forEach((el, i) => { el.style.animationDelay = `${Math.min(i, cap) * stepMs}ms`; });
+}
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 function say(msg, kind = "") { const s = $("status"); s.textContent = msg; s.className = kind; }
 function stamp() {
@@ -615,33 +943,127 @@ $("rowMenu").onclick = e => {
 };
 
 /* ---------------------------------------------------------------- list */
+// null = every app. Survives a refresh; cleared when the chosen app loses its last profile.
+let picked = null, query = "";
+
+const matches = p => {
+  const q = query.trim().toLowerCase();
+  return !q || p.app.toLowerCase().includes(q) || p.name.toLowerCase().includes(q);
+};
+const initials = s => (s.match(/\p{L}\p{M}*/gu) || ["?"])[0].toUpperCase();
+
+/// The sidebar is derived from the profile list, never stored alongside it — one source of truth,
+/// so an app cannot linger in the sidebar after its last profile is deleted.
+function renderNav() {
+  const visible = rows.filter(matches);
+  const byApp = new Map();
+  for (const p of visible) {
+    const e = byApp.get(p.app) || { n: 0, live: 0 };
+    e.n++; if (p.running) e.live++;
+    byApp.set(p.app, e);
+  }
+  // Forget the selection only when the app itself is gone — checked against every profile, not
+  // against the search results. Checking the filtered set meant typing a query that matched
+  // nothing silently dropped you back to "All apps", and clearing the box did not bring you back.
+  if (picked !== null && !rows.some(p => p.app === picked)) picked = null;
+
+  const live = visible.filter(p => p.running).length;
+  const all = `<button class="nav${picked === null ? " on" : ""}" data-app="">
+      <span class="swatch" aria-hidden="true">\u2217</span><span class="nm">${esc(t("allApps"))}</span>
+      <span class="ct${live ? " live" : ""}">${visible.length}</span></button>`;
+
+  $("appNav").innerHTML = all + [...byApp.entries()]
+    .sort((a, b) => a[0].toLowerCase().localeCompare(b[0].toLowerCase()))
+    .map(([app, e]) => `<button class="nav${picked === app ? " on" : ""}" data-app="${esc(app)}">
+        <span class="swatch" aria-hidden="true">${esc(initials(app))}</span><span class="nm" title="${esc(app)}">${esc(app)}</span>
+        <span class="ct${e.live ? " live" : ""}">${e.live ? `${e.live}/${e.n}` : e.n}</span></button>`).join("");
+
+  $("appNav").querySelectorAll("[data-app]").forEach(b => {
+    b.onclick = () => { picked = b.dataset.app || null; render(); };
+  });
+  return visible;
+}
+
 function render() {
+  const visible = renderNav();
+  const shown = picked === null ? visible : visible.filter(p => p.app === picked);
+  const live = shown.filter(p => p.running).length;
+
+  $("paneTitle").textContent = picked === null ? t("allApps") : picked;
+  $("paneSub").textContent = rows.length
+    ? `${shown.length} ${shown.length === 1 ? t("profile") : t("profiles")}` +
+      (live ? ` · ${live} ${t("running").toLowerCase()}` : "")
+    : "";
+
   const list = $("list");
-  if (!rows.length) {
-    list.innerHTML = `<div class="empty"><b>${esc(t("noneTitle"))}</b>${esc(t("noneBody"))}</div>`;
+  if (!shown.length) {
+    const empty = rows.length
+      ? `<div class="empty"><b>${esc(t("noMatch"))}</b>${esc(t("noMatchBody"))}</div>`
+      : `<div class="empty"><b>${esc(t("noneTitle"))}</b>${esc(t("noneBody"))}</div>`;
+    list.innerHTML = empty;
+    say(rows.length ? t("noMatch") : "");
     return;
   }
-  list.innerHTML = rows.map((p, i) => {
+
+  list.innerHTML = shown.map((p, i) => {
     // "unknown" stays its own state: it means processes existed that could not be inspected, and
     // calling that "stopped" would be a claim the tool cannot support
     const cls   = p.running ? "run" : (p.certain ? "" : "unknown");
     const state = p.running ? t("running") : (p.certain ? t("stopped") : t("unknown"));
+    // One primary action per row. Everything else lives behind the menu, because five buttons of
+    // equal weight side by side is not a choice, it is a wall.
     const main  = p.running
       ? `<button class="btn stop" data-act="stop" data-i="${i}">${esc(t("stop"))}</button>`
       : `<button class="btn primary" data-act="launch" data-i="${i}">${esc(t("launch"))}</button>`;
     const fresh = shownKeys.has(keyOf(p)) ? "" : " fresh";
-    return `<div class="row${fresh}" style="animation-delay:${Math.min(i,8)*22}ms">
-      <span class="dot ${cls}" title="${esc(state)}"></span>
-      <span class="meta"><div class="app">${esc(p.app)}</div><div class="sub">${esc(p.name)} · ${esc(state)}</div></span>
+    // With an app selected its name is already the pane title, so the row leads with the profile.
+    const lead = picked === null ? `${p.app} · ${p.name}` : p.name;
+    // A known size is painted straight away; only an unmeasured profile shows the placeholder,
+    // so switching apps or retyping a search never puts "measuring…" back on a row you have
+    // already seen the number for.
+    const k = keyOf(p);
+    const sz = sizeCache.has(k) ? sizeText(sizeCache.get(k)) : t("measuring");
+    return `<div class="row${p.running ? " live" : ""}${fresh}">
+      <span class="tile" aria-hidden="true">${esc(initials(p.app))}</span>
+      <span class="meta"><div class="app">${esc(lead)}</div>
+        <div class="sub"><span class="dot ${cls}"></span>${esc(state)}
+          <span class="sep">·</span><span class="psz" data-psz="${i}">${esc(sz)}</span></div></span>
       ${main}
-      <button class="icon" data-act="menu" data-i="${i}" title="…">⋯</button></div>`;
+      <button class="icon" data-act="menu" data-i="${i}" aria-label="${esc(t("moreActions"))}">⋯</button></div>`;
   }).join("");
+
+  stagger(list, ".row", 22, 8);
   list.querySelectorAll("[data-act]").forEach(b => {
-    b.onclick = ev => { ev.stopPropagation(); act(b.dataset.act, rows[+b.dataset.i], b); };
+    b.onclick = ev => { ev.stopPropagation(); act(b.dataset.act, shown[+b.dataset.i], b); };
   });
+  measureProfiles(shown);
   shownKeys = new Set(rows.map(keyOf));
   say(`${rows.length} ${rows.length === 1 ? t("profile") : t("profiles")}`);
 }
+
+// How big each profile is on disk. Measured the same way the backup list learned to do it: after
+// the rows are drawn, one profile at a time, because a profile is a browser data directory and
+// Claude's runs to gigabytes. Results are cached by profile so re-rendering costs nothing; ↻
+// clears the cache when you want the numbers taken again.
+const sizeCache = new Map();
+const sizeText = b => (b == null ? "—" : human(b));   // unreadable is not zero
+
+async function measureProfiles(list) {
+  const token = ++measureProfiles.run;
+  for (let i = 0; i < list.length; i++) {
+    const p = list[i], k = keyOf(p);
+    if (sizeCache.has(k)) continue;
+    let bytes = null;
+    try {
+      bytes = await invoke("profile_size", { app: p.app, name: p.name });
+    } catch { /* a profile we cannot read still gets a row, just no number */ }
+    if (token !== measureProfiles.run) return;   // a newer render owns the list now
+    sizeCache.set(k, bytes);
+    const el = document.querySelector(`[data-psz="${i}"]`);
+    if (el) el.textContent = sizeText(bytes);
+  }
+}
+measureProfiles.run = 0;
 
 async function refresh(force = false) {
   try {
@@ -709,6 +1131,33 @@ function openProfileDialog(kind, p) {
   }).catch(() => {});
 }
 $("new").onclick = () => openProfileDialog("new", null);
+
+// Every sheet gets a close button, injected once rather than written into six copies of the
+// markup — a new sheet then cannot ship without one. Clicking the dimmed area closes too, but
+// that is a shortcut people have to guess; this is the affordance.
+for (const bd of document.querySelectorAll(".backdrop")) {
+  const modal = bd.querySelector(".modal");
+  if (!modal || modal.querySelector(".x")) continue;
+  const x = document.createElement("button");
+  x.className = "x";
+  x.type = "button";
+  x.setAttribute("aria-label", t("close"));
+  x.textContent = "\u2715";
+  x.onclick = () => bd.classList.remove("open");
+  modal.prepend(x);
+}
+// Clicking the dimmed area closes; clicking inside the sheet must not.
+for (const bd of document.querySelectorAll(".backdrop")) {
+  bd.addEventListener("mousedown", e => { if (e.target === bd) bd.classList.remove("open"); });
+}
+
+// Filtering is local to what is already loaded, so it costs nothing and needs no debounce.
+$("q").oninput = e => { query = e.target.value; render(); };
+$("q").onkeydown = e => {
+  if (e.key !== "Escape" || !e.target.value) return;
+  e.stopPropagation();          // or the window's Escape handler closes a dialog instead
+  e.target.value = ""; query = ""; render();
+};
 $("pCancel").onclick = () => $("bdProfile").classList.remove("open");
 
 let checkT;
@@ -759,7 +1208,23 @@ $("cOk").onclick = async () => {
 $("settings").onclick = async () => {
   closeMenus();
   $("bdSettings").classList.add("open");
+  $("docRow").hidden = !hasCli;          // nothing to run without the CLI; do not offer it
+  $("docOut").hidden = true;             // a stale report from last time is worse than none
   try { $("rootPath").textContent = await invoke("profiles_root"); } catch (_) {}
+};
+
+$("docRun").onclick = async () => {
+  const out = $("docOut"), btn = $("docRun");
+  out.hidden = false; out.textContent = t("checking");
+  btn.disabled = true;
+  try {
+    // `doctor` is one of the CLI's allowlisted read-only commands; the allowlist lives in Rust,
+    // not here, so a bug in this file cannot widen what the web view is able to run.
+    out.textContent = (await invoke("run_advanced", { args: ["doctor"] })).trim() || t("nothingSaved");
+  } catch (e) {
+    out.textContent = String(e);
+  }
+  btn.disabled = false;
 };
 $("sClose").onclick = () => $("bdSettings").classList.remove("open");
 $("themeSeg").onclick = e => {
@@ -777,7 +1242,33 @@ $("langSeg").onclick = e => {
 /* ---------------------------------------------------------------- backup & restore */
 const dialog = () => window.__TAURI__.dialog;
 const human = b => { const u=["B","KB","MB","GB","TB"]; let v=b,i=0; while(v>=1024&&i<u.length-1){v/=1024;i++;} return i?`${v.toFixed(1)} ${u[i]}`:`${b} B`; };
+// Whether the bash CLI is installed. session-check runs through it, so the button that calls
+// it is hidden rather than offered and then failing. Set once at start-up.
+let hasCli = false;
 let apps = [];
+
+// Sizes arrive after the list is already on screen, one app at a time.
+//
+// They used to arrive with it, and that is what made this window sit on a spinner: the backend
+// summed every byte each app owns before it would answer, and Claude's tree alone is 15.9 GB.
+// Measuring is still slow — it is the same walk — but it is nobody's blocker now, and each row
+// fills in on its own. Serial on purpose: twenty parallel disk walks make all twenty slower.
+async function measureSizes(box) {
+  const token = ++measureSizes.run;   // a second open supersedes the first; drop the stale one
+  for (const el of box.querySelectorAll("[data-sz]")) {
+    const a = apps[+el.dataset.sz];
+    if (!a) continue;
+    try {
+      const bytes = await invoke("app_data_size", { app: a.name });
+      if (token !== measureSizes.run) return;
+      el.textContent = human(bytes);
+    } catch {
+      if (token !== measureSizes.run) return;
+      el.textContent = "—";           // unreadable is not zero, and must not be shown as "0 B"
+    }
+  }
+}
+measureSizes.run = 0;
 
 async function loadApps() {
   const box = $("appList");
@@ -786,22 +1277,27 @@ async function loadApps() {
     apps = await invoke("list_app_data");
   } catch (e) { box.innerHTML = `<div class="hint bad">${esc(String(e))}</div>`; return; }
   if (!apps.length) { box.innerHTML = `<div class="note">${esc(t("noApps"))}</div>`; return; }
-  box.innerHTML = apps.map((a, i) => `<div class="arow" style="animation-delay:${Math.min(i,10)*18}ms">
-      <span class="n"><b>${esc(a.name)}</b><span>${esc(a.evidence)} · ${esc(human(a.bytes))}</span></span>
-      <button class="btn ghost" data-sites="${i}">${esc(t("sites"))}</button>
+  box.innerHTML = apps.map((a, i) => `<div class="arow">
+      <span class="n"><b>${esc(a.name)}</b><span>${esc(a.evidence)} · <span class="sz" data-sz="${i}">${esc(t("measuring"))}</span></span></span>
+      <button class="btn ghost" data-saved="${i}" title="${esc(t("savedHint"))}"${hasCli ? "" : " hidden"}>${esc(t("whatsSaved"))}</button>
+      <button class="btn ghost" data-sites="${i}" title="${esc(t("sitesHint"))}">${esc(t("sites"))}</button>
       <button class="btn ghost" data-b="${i}" data-full="1">${esc(t("full"))}</button>
       <button class="btn ghost" data-b="${i}" data-full="0">${esc(t("loginOnly"))}</button>
     </div>`).join("");
+  stagger(box, ".arow", 18, 10);
+  measureSizes(box);
   box.querySelectorAll("[data-sites]").forEach(btn => {
     btn.onclick = () => showSites(apps[+btn.dataset.sites]);
+  });
+  box.querySelectorAll("[data-saved]").forEach(btn => {
+    btn.onclick = () => showSaved(apps[+btn.dataset.saved]);
   });
   box.querySelectorAll("[data-b]").forEach(btn => {
     btn.onclick = () => doBackup(apps[+btn.dataset.b], btn.dataset.full === "1");
   });
 }
 
-async function doBackup(a, full) {
-  const st = $("bStatus");
+async function doBackup(a, full, st = $("bStatus")) {
   try {
     const suffix = full ? "data" : "login";
     const path = await dialog().save({
@@ -817,8 +1313,10 @@ async function doBackup(a, full) {
   } catch (e) { st.textContent = String(e); st.className = "hint bad"; }
 }
 
-$("bRestore").onclick = async () => {
-  const st = $("bStatus");
+// One restore path for both sheets. `onlyFor` is set when the user came in through a specific
+// app: an archive made for a different app is refused there rather than quietly restored into
+// that other app while the sheet in front of them says something else.
+async function restoreFromFile(st, onlyFor = null) {
   try {
     const path = await dialog().open({
       title: t("chooseArchive"), multiple: false,
@@ -827,6 +1325,10 @@ $("bRestore").onclick = async () => {
     if (!path) return;
     // show what is inside BEFORE writing anything
     const m = await invoke("archive_info", { path });
+    if (onlyFor && String(m.app).toLowerCase() !== onlyFor.toLowerCase()) {
+      st.textContent = `${t("wrongArchive")} ${m.app} ≠ ${onlyFor}`; st.className = "hint bad";
+      return;
+    }
     const ok = await dialog().confirm(
       `${t("archiveHolds")}: ${m.app} — ${m.kind}, ${m.paths.length} path(s), ${m.os}, ${m.created}`,
       { title: t("restoreFrom"), kind: "warning" });
@@ -835,10 +1337,10 @@ $("bRestore").onclick = async () => {
     st.textContent = await invoke("restore_archive", { path });
     st.className = "hint good";
   } catch (e) { st.textContent = String(e); st.className = "hint bad"; }
-};
+}
+$("bRestore").onclick = () => restoreFromFile($("bStatus"));
 
-async function showSites(a) {
-  const st = $("bStatus");
+async function showSites(a, st = $("bStatus")) {
   st.textContent = "…"; st.className = "hint";
   try {
     const c = await invoke("cookie_report", { app: a.name });
@@ -849,6 +1351,25 @@ async function showSites(a) {
     st.className = "hint";
     say(t("siteHint"));
   } catch (e) { st.textContent = String(e); st.className = "hint bad"; }
+}
+
+// The full "what is actually saved for this app" report, straight from the CLI's session-check.
+// `cookie_report` above answers only which hosts the cookies belong to; this one also names the
+// files it found and whether the login would survive a move to another machine — the honest
+// answer to "what will a backup of this actually contain". macOS-only, because the CLI is.
+async function showSaved(a) {
+  const box = $("savedBody"), st = $("bStatus");
+  $("savedTitle").textContent = a.name;
+  box.textContent = t("checking");
+  $("bdSaved").classList.add("open");
+  try {
+    const report = await invoke("session_check", { app: a.name });
+    // textContent, never innerHTML: this is CLI output about files on disk, not markup.
+    box.textContent = report.trim() || t("nothingSaved");
+  } catch (e) {
+    box.textContent = String(e);
+    st.textContent = String(e); st.className = "hint bad";
+  }
 }
 
 $("probeBtn").onclick = async () => {
@@ -936,7 +1457,7 @@ function renderSess() {
   const box = $("sList"), list = visibleSess();
   const many = new Set(sess.map(s => s.account)).size > 1 && !$("sFromAcct").value;
   if (!list.length) {
-    box.innerHTML = `<div class="note" style="margin:6px">${esc(t("noSessionsIn"))} '${esc($("sFrom").value)}'</div>`;
+    box.innerHTML = `<div class="note m6">${esc(t("noSessionsIn"))} '${esc($("sFrom").value)}'</div>`;
     updateCount();
     return;
   }
@@ -954,7 +1475,7 @@ async function loadSessions() {
   const box = $("sList"), from = $("sFrom").value;
   const mine = ++sessSeq;
   sess = []; checked.clear();
-  box.innerHTML = `<div class="note" style="margin:6px">${esc(t("loadingSessions"))}</div>`;
+  box.innerHTML = `<div class="note m6">${esc(t("loadingSessions"))}</div>`;
   updateCount();
   try {
     const got = await invoke("claude_sessions", { profile: from });
@@ -963,7 +1484,7 @@ async function loadSessions() {
   } catch (e) {
     if (mine !== sessSeq) return;
     // The CLI failing and the profile being empty are different facts, and this says which.
-    box.innerHTML = `<div class="hint bad" style="margin:6px">${esc(String(e))}</div>`;
+    box.innerHTML = `<div class="hint bad m6">${esc(String(e))}</div>`;
     return;
   }
   renderSess();
@@ -1004,13 +1525,60 @@ async function loadToAccounts() {
   markNeed();
 }
 
-$("sessBtn").onclick = () => {
+function openClaudeSessions() {
   closeMenus();
   sessStatus("");
   fillTargets();
   $("bdSessions").classList.add("open");
   loadSessions(); loadFromAccounts(); loadToAccounts();
+}
+
+/* ---------------------------------------------------------------- sessions: pick an app */
+// "Sessions" asks which app first. It used to open Claude's sheet directly, as if Claude were
+// the only app with a session; it is only the one app whose *conversations* can be moved.
+let sessApps = [], sessApp = null;
+
+$("sessBtn").onclick = async () => {
+  closeMenus();
+  const box = $("sessAppList");
+  box.innerHTML = `<div class="note">${esc(t("scanning"))}</div>`;
+  $("bdSessApps").classList.add("open");
+  try {
+    sessApps = await invoke("session_apps");
+  } catch (e) { box.innerHTML = `<div class="hint bad">${esc(String(e))}</div>`; return; }
+  if (!sessApps.length) { box.innerHTML = `<div class="note">${esc(t("sessNone"))}</div>`; return; }
+  box.innerHTML = sessApps.map((a, i) => `<button class="pick" data-pick="${i}">
+      <span class="tile" aria-hidden="true">${esc(initials(a.app))}</span>
+      <span class="pn"><b>${esc(a.app)}</b><span>${esc(a.evidence)}</span></span>
+      <span class="go" aria-hidden="true">›</span></button>`).join("");
+  box.querySelectorAll("[data-pick]").forEach(b => {
+    b.onclick = () => openSessApp(sessApps[+b.dataset.pick]);
+  });
 };
+$("spClose").onclick = () => $("bdSessApps").classList.remove("open");
+
+function openSessApp(a) {
+  sessApp = a;
+  $("saTitle").textContent = a.app;
+  $("saSub").textContent = a.evidence;
+  $("saStatus").textContent = ""; $("saStatus").className = "hint";
+  // Conversation transfer exists for Claude only, and only through the CLI; session-check too.
+  $("saClaude").hidden = !(hasCli && a.name.toLowerCase() === "claude");
+  $("saSaved").hidden = !hasCli;
+  $("bdSessApps").classList.remove("open");
+  $("bdSessApp").classList.add("open");
+  // the size arrives after the sheet is up, like everywhere else in this window
+  invoke("app_data_size", { app: a.name }).then(b => {
+    if (sessApp === a) $("saSub").textContent = `${a.evidence} · ${human(b)}`;
+  }).catch(() => {});
+}
+$("saClose").onclick  = () => $("bdSessApp").classList.remove("open");
+$("saBack").onclick   = () => { $("bdSessApp").classList.remove("open"); $("sessBtn").onclick(); };
+$("saBackup").onclick  = () => sessApp && doBackup(sessApp, false, $("saStatus"));
+$("saRestore").onclick = () => sessApp && restoreFromFile($("saStatus"), sessApp.name);
+$("saSaved").onclick   = () => sessApp && showSaved(sessApp);
+$("saSites").onclick   = () => sessApp && showSites(sessApp, $("saStatus"));
+$("saClaude").onclick  = () => { $("bdSessApp").classList.remove("open"); openClaudeSessions(); };
 $("sDone").onclick = () => $("bdSessions").classList.remove("open");
 $("sFrom").onchange = () => { loadSessions(); loadFromAccounts(); };
 $("sTo").onchange = () => loadToAccounts();
@@ -1107,7 +1675,7 @@ function trashRow(it, i) {
   }
   if (when) bits.push(when);
   bits.push(human(it.bytes));
-  return `<div class="arow" style="animation-delay:${Math.min(i, 10) * 18}ms">
+  return `<div class="arow">
       <span class="kind ${esc(it.kind)}">${icon}</span>
       <span class="n"><b title="${esc(it.id)}">${esc(title)}</b><span>${esc(bits.join(" · "))}</span></span>
       ${it.restorable ? `<button class="btn ghost" data-restore="${i}">${esc(t("restore"))}</button>` : ""}
@@ -1123,6 +1691,7 @@ async function loadTrash() {
   $("trashEmpty").disabled = !trashItems.length;
   if (!trashItems.length) { box.innerHTML = `<div class="note">${esc(t("trashEmptyNow"))}</div>`; updateTrashBadge(); return; }
   box.innerHTML = trashItems.map(trashRow).join("");
+  stagger(box, ".arow", 18, 10);
   box.querySelectorAll("[data-restore]").forEach(b => { b.onclick = () => restoreTrash(trashItems[+b.dataset.restore]); });
   box.querySelectorAll("[data-reveal]").forEach(b => {
     b.onclick = () => invoke("trash_reveal", { id: trashItems[+b.dataset.reveal].id }).catch(e => trashStatus(String(e), "bad"));
@@ -1159,6 +1728,7 @@ $("trashEmpty").onclick = async () => {
 $("bRescan").onclick = loadApps;
 $("advBtn").onclick = () => { closeMenus(); $("bStatus").textContent = ""; $("bdTools").classList.add("open"); loadApps(); };
 $("tClose").onclick = () => $("bdTools").classList.remove("open");
+$("savedClose").onclick = () => $("bdSaved").classList.remove("open");
 
 document.querySelectorAll(".backdrop").forEach(bd => {
   bd.onclick = e => { if (e.target === bd) bd.classList.remove("open"); };
@@ -1171,7 +1741,13 @@ document.addEventListener("keydown", e => {
   if (e.key === "Enter" && open === $("bdConfirm")) $("cOk").click();
 });
 
-$("refresh").onclick = () => { $("refresh").classList.add("spin"); refresh().finally(() => setTimeout(() => $("refresh").classList.remove("spin"), 350)); };
+$("refresh").onclick = () => {
+  $("refresh").classList.add("spin");
+  // An explicit rescan is the one place sizes are taken again. The poll must not do it: walking
+  // every profile tree every few seconds is the mistake that made the backup window unusable.
+  sizeCache.clear();
+  refresh(true).finally(() => setTimeout(() => $("refresh").classList.remove("spin"), 350));
+};
 
 /* ---------------------------------------------------------------- boot */
 (async () => {
@@ -1180,7 +1756,9 @@ $("refresh").onclick = () => { $("refresh").classList.add("spin"); refresh().fin
   $("advBtn").hidden = false;
   // Sessions need the macOS CLI. Showing a button that can only ever say "not installed" is worse
   // than not showing it, so the backend is asked first.
-  try { $("sessBtn").hidden = !(await invoke("advanced_available")); } catch (_) {}
+  try {
+    hasCli = await invoke("advanced_available");
+  } catch (_) {}
   updateTrashBadge();
   try {
     if (!(await invoke("in_start_menu")) && navigator.userAgent.includes("Windows")) $("pin").hidden = false;

@@ -1959,14 +1959,14 @@ dependencies = [
 
 [[package]]
 name = "multiapp-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "multiapp-core",
 ]
 
 [[package]]
 name = "multiapp-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "directories",
  "rusqlite",
@@ -1979,7 +1979,7 @@ dependencies = [
 
 [[package]]
 name = "multiapp-gui"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "multiapp-core",
  "serde",

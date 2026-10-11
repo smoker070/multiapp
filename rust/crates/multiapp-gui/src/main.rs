@@ -288,6 +288,16 @@ fn advanced(args: &[&str]) -> Result<String, String> {
         if out.status.success() {
             return Ok(stdout);
         }
+
+        // A reporting command uses its exit code to say "I found something", not "I could not
+        // run". `doctor` exits 1 for a missing app and still prints the whole report, and
+        // throwing that away left the window showing only "failed (exit status: 1)" — the one
+        // thing the user did not need to know. If it produced a report, the report IS the answer.
+        const REPORTS_VIA_EXIT_CODE: &[&str] = &["doctor", "session-check", "probe"];
+        if REPORTS_VIA_EXIT_CODE.contains(&first) && !stdout.trim().is_empty() {
+            return Ok(if stderr.is_empty() { stdout } else { format!("{stdout}\n{stderr}") });
+        }
+
         Err(if stderr.is_empty() {
             format!("`multiapp {first}` failed ({})", out.status)
         } else {
@@ -425,12 +435,15 @@ fn session_check(app: String) -> Result<String, String> {
 #[derive(Serialize)]
 struct AppDataDto {
     name: String,
-    bytes: u64,
     evidence: String,
     dirs: usize,
 }
 
 /// Applications on this machine that hold a session worth keeping.
+///
+/// Carries no sizes. It used to, and measuring them is what made the Back Up window sit on a
+/// spinner: every app's tree was walked in full before the first row could be drawn, and Claude's
+/// is gigabytes. The window now draws immediately and asks `app_data_size` per app afterwards.
 #[tauri::command]
 fn list_app_data() -> Result<Vec<AppDataDto>, String> {
     Ok(appdata::installed()
@@ -438,11 +451,62 @@ fn list_app_data() -> Result<Vec<AppDataDto>, String> {
         .into_iter()
         .map(|a| AppDataDto {
             name: a.name,
-            bytes: a.bytes,
             evidence: a.evidence.label().to_string(),
             dirs: a.dirs.len(),
         })
         .collect())
+}
+
+#[derive(Serialize)]
+struct SessionAppDto {
+    /// The data folder's name — what every backup and report command is keyed by.
+    name: String,
+    /// The installed application that owns it, as the user knows it.
+    app: String,
+    evidence: String,
+}
+
+/// Applications that are installed AND hold a session — the Sessions picker.
+///
+/// `list_app_data` answers a different question: every data folder with a session in it, which
+/// includes the folders uninstalled apps leave behind. That is right for backups (the data is
+/// still worth saving) and wrong here, where offering a session for an app that is not on the
+/// machine is just noise.
+#[tauri::command]
+fn session_apps() -> Result<Vec<SessionAppDto>, String> {
+    // Only the macOS branch below adds to this, so elsewhere the `mut` is unused — and this
+    // file is built on Windows, where I cannot see the warning.
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+    let mut installed: Vec<String> = detect_apps().into_iter().map(|a| a.name).collect();
+    // Per-user installs. Not part of detect_apps because `launch` cannot resolve them yet, and
+    // the New Profile list must only offer what can actually be launched.
+    #[cfg(target_os = "macos")]
+    if let Ok(home) = std::env::var("HOME") {
+        if let Ok(rd) = std::fs::read_dir(PathBuf::from(home).join("Applications")) {
+            for p in rd.flatten().map(|e| e.path()) {
+                if p.extension().and_then(|s| s.to_str()) == Some("app") {
+                    if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                        installed.push(stem.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(appdata::installed()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter_map(|a| {
+            let app = appdata::owner_of(&a.name, &installed)?.to_string();
+            Some(SessionAppDto { name: a.name, app, evidence: a.evidence.label().to_string() })
+        })
+        .collect())
+}
+
+/// Bytes one app holds. Slow on purpose — called once per visible row, never in a loop up front.
+#[tauri::command]
+fn app_data_size(app: String) -> Result<u64, String> {
+    appdata::size_of(&app).map_err(|e| e.to_string())
 }
 
 fn now_stamp() -> String {
@@ -578,6 +642,8 @@ fn main() {
             trash_reveal,
             trash_empty,
             list_app_data,
+            app_data_size,
+            session_apps,
             backup_app,
             archive_info,
             restore_archive,
@@ -586,4 +652,23 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the Multiapp window");
+}
+
+#[cfg(test)]
+mod ui_tests {
+    /// The packaged window drops inline style attributes: its CSP carries a nonce, and a nonce
+    /// makes the browser ignore 'unsafe-inline'. They render in a plain browser and vanish in the
+    /// app, which is how sheets shipped at the wrong width and Delete buttons shipped grey.
+    /// Styling goes in the stylesheet; positions computed at runtime go through `el.style`.
+    #[test]
+    fn the_ui_has_no_inline_style_attributes() {
+        let html = include_str!("../ui/index.html");
+        let hits: Vec<usize> = html
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.contains("style=\""))
+            .map(|(i, _)| i + 1)
+            .collect();
+        assert!(hits.is_empty(), "inline style attribute(s) at ui/index.html line(s) {hits:?}");
+    }
 }
