@@ -115,7 +115,7 @@ fn require_idle(app: &str, name: &str) -> Result<(), Error> {
         return Err(Error::Running(format!("{app}/{name}")));
     }
     if s.opaque > 0 {
-        return Err(Error::Uncertain(format!("{app}/{name}"), s.opaque));
+        return Err(Error::Uncertain(format!("{app}/{name}"), s.opaque, s.opaque_names.join(", ")));
     }
     Ok(())
 }
@@ -218,6 +218,11 @@ pub fn reveal(app: &str, name: &str) -> Result<(), Error> {
 
 #[cfg(test)]
 mod op_tests {
+    /// A fake app no real process runs as. These tests are about clone, rename, delete and
+    /// restore; with a real name ("Edge") they also depended on what happened to be running on
+    /// the machine, and failed on a Windows runner that had an unreadable Edge-ish process.
+    const APP: &str = "Zqxtestapp";
+
     use super::*;
 
     /// Each test gets its own root. MULTIAPP_HOME is process-wide, so these run serially by design —
@@ -243,8 +248,8 @@ mod op_tests {
     #[test]
     fn delete_moves_to_trash_and_keeps_the_data() {
         with_root(|| {
-            seed("Edge", "gone", "a real login");
-            let staged = delete_to_trash("Edge", "gone", "20260101-000000").unwrap();
+            seed(APP, "gone", "a real login");
+            let staged = delete_to_trash(APP, "gone", "20260101-000000").unwrap();
             // the profile is out of the list...
             assert!(!list().unwrap().iter().any(|p| p.name == "gone"));
             // ...but every byte is still on disk, which is the whole point of not deleting
@@ -257,44 +262,44 @@ mod op_tests {
     #[test]
     fn clone_copies_contents_and_refuses_an_existing_target() {
         with_root(|| {
-            seed("Edge", "src", "session");
-            clone_profile("Edge", "src", "dst").unwrap();
-            let d = paths::profile_data_dir("Edge", "dst").unwrap();
+            seed(APP, "src", "session");
+            clone_profile(APP, "src", "dst").unwrap();
+            let d = paths::profile_data_dir(APP, "dst").unwrap();
             assert_eq!(std::fs::read_to_string(d.join("Cookies")).unwrap(), "session");
             // the original must survive a clone
-            assert!(paths::profile_data_dir("Edge", "src").unwrap().join("Cookies").exists());
-            assert!(clone_profile("Edge", "src", "dst").is_err());
+            assert!(paths::profile_data_dir(APP, "src").unwrap().join("Cookies").exists());
+            assert!(clone_profile(APP, "src", "dst").is_err());
         })
     }
 
     #[test]
     fn rename_refuses_a_collision_and_leaves_both_intact() {
         with_root(|| {
-            seed("Edge", "one", "1");
-            seed("Edge", "two", "2");
-            assert!(rename("Edge", "one", "two").is_err());
-            assert_eq!(std::fs::read_to_string(paths::profile_data_dir("Edge", "one").unwrap().join("Cookies")).unwrap(), "1");
-            assert_eq!(std::fs::read_to_string(paths::profile_data_dir("Edge", "two").unwrap().join("Cookies")).unwrap(), "2");
-            rename("Edge", "one", "three").unwrap();
-            assert!(paths::profile_data_dir("Edge", "three").unwrap().join("Cookies").exists());
+            seed(APP, "one", "1");
+            seed(APP, "two", "2");
+            assert!(rename(APP, "one", "two").is_err());
+            assert_eq!(std::fs::read_to_string(paths::profile_data_dir(APP, "one").unwrap().join("Cookies")).unwrap(), "1");
+            assert_eq!(std::fs::read_to_string(paths::profile_data_dir(APP, "two").unwrap().join("Cookies")).unwrap(), "2");
+            rename(APP, "one", "three").unwrap();
+            assert!(paths::profile_data_dir(APP, "three").unwrap().join("Cookies").exists());
         })
     }
 
     #[test]
     fn size_counts_what_is_there() {
         with_root(|| {
-            seed("Edge", "big", "0123456789");
-            assert_eq!(size_bytes("Edge", "big").unwrap(), 10);
+            seed(APP, "big", "0123456789");
+            assert_eq!(size_bytes(APP, "big").unwrap(), 10);
         })
     }
 
     #[test]
     fn a_bad_name_cannot_escape_the_root() {
         with_root(|| {
-            seed("Edge", "ok", "x");
+            seed(APP, "ok", "x");
             for bad in ["../escape", "..", "a/b"] {
-                assert!(rename("Edge", "ok", bad).is_err(), "rename to {bad:?} must be refused");
-                assert!(clone_profile("Edge", "ok", bad).is_err(), "clone to {bad:?} must be refused");
+                assert!(rename(APP, "ok", bad).is_err(), "rename to {bad:?} must be refused");
+                assert!(clone_profile(APP, "ok", bad).is_err(), "clone to {bad:?} must be refused");
             }
         })
     }

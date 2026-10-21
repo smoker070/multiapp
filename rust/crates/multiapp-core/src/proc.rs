@@ -17,9 +17,12 @@ pub struct Sweep {
     /// the parent — and it is the only one worth asking to quit. Signalling the helpers instead just
     /// makes the parent respawn them.
     pub main: Option<u32>,
-    /// Processes we could see but not read the command line of. Non-empty means "I cannot be sure
-    /// this profile is stopped", and destructive operations must refuse.
+    /// Processes we could see but not read the command line of, AND whose executable could be
+    /// this profile's app. Non-zero means "I cannot be sure this profile is stopped", and
+    /// destructive operations must refuse.
     pub opaque: usize,
+    /// Their executable names — so a refusal can say what it is waiting on instead of a bare count.
+    pub opaque_names: Vec<String>,
 }
 
 impl Sweep {
@@ -51,8 +54,44 @@ fn paths_equal(a: &str, b: &str) -> bool {
     norm(a) == norm(b)
 }
 
+/// Could a process with this executable name be an instance of `app`?
+///
+/// Asked only about processes whose arguments cannot be read — on Windows, an elevated process
+/// of the same user. Counting EVERY such process as a possible match meant one elevated program
+/// of any kind (Task Manager run as admin, an installer) made every profile of every app
+/// "uncertain", and clone, rename and delete all refused. It surfaced when GitHub's Windows
+/// image started carrying such a process.
+///
+/// The test is generous on purpose: any word of three letters or more from the app's key that
+/// appears in the executable name. `Edge` catches `msedge.exe`, `google-chrome` catches
+/// `chrome.exe`, `Telegram Desktop` catches `Telegram.exe`. A false match only makes us more
+/// careful; a key with no usable word matches everything, which is the old, safe behaviour.
+pub fn could_be(app_key: &str, process_name: &str) -> bool {
+    let exe = process_name.to_lowercase();
+    let exe = exe.strip_suffix(".exe").unwrap_or(&exe);
+    let key = app_key.to_lowercase();
+    let mut words = key.split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() >= 3).peekable();
+    if words.peek().is_none() {
+        return true;
+    }
+    words.any(|w| exe.contains(w))
+}
+
+/// The app a profile data directory belongs to, read from its layout
+/// (`…/Profiles/<app>/<profile>/data`). Empty when the path is not shaped like that, which makes
+/// `could_be` match everything — a path we do not understand gets the cautious answer.
+fn app_of(data_dir: &Path) -> String {
+    data_dir
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
 pub fn sweep(data_dir: &Path) -> Sweep {
     let want = data_dir.to_string_lossy().to_string();
+    let app = app_of(data_dir);
     let mut sys = System::new_with_specifics(
         RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
     );
@@ -66,13 +105,17 @@ pub fn sweep(data_dir: &Path) -> Sweep {
     let mut pids = Vec::new();
     let mut main: Option<u32> = None;
     let mut opaque = 0usize;
+    let mut opaque_names = Vec::new();
     for (pid, p) in sys.processes() {
         let cmd = p.cmd();
         if cmd.is_empty() {
             // Visible process, unreadable arguments. On Windows this is how an elevated app of the
-            // same user appears, and it is silent — count it rather than assuming innocence.
-            if me.is_some() && p.user_id() == me.as_ref() {
+            // same user appears, and it is silent — count it rather than assuming innocence, but
+            // only if it could be this app at all.
+            let name = p.name().to_string_lossy().to_string();
+            if me.is_some() && p.user_id() == me.as_ref() && could_be(&app, &name) {
                 opaque += 1;
+                opaque_names.push(name);
             }
             continue;
         }
@@ -84,7 +127,7 @@ pub fn sweep(data_dir: &Path) -> Sweep {
             pids.push(pid.as_u32());
         }
     }
-    Sweep { pids, main, opaque }
+    Sweep { pids, main, opaque, opaque_names }
 }
 
 /// Ask the processes to quit and wait. Never force-kills.
@@ -184,6 +227,29 @@ mod tests {
         assert!(!arg_matches("--disk-cache-dir=/tmp/p/data", dir));
         assert!(!arg_matches("--type=renderer", dir));
         assert!(!arg_matches("/Applications/Foo.app/Contents/MacOS/Foo", dir));
+    }
+
+    #[test]
+    fn an_unreadable_process_only_counts_if_it_could_be_the_app() {
+        // the processes the real apps run as
+        assert!(could_be("Edge", "msedge.exe"));
+        assert!(could_be("Microsoft Edge", "msedge.exe"));
+        assert!(could_be("google-chrome", "chrome.exe"));
+        assert!(could_be("Telegram Desktop", "Telegram.exe"));
+        assert!(could_be("claude", "Claude"));
+        // the case that broke CI: an unrelated elevated process must not block every profile
+        assert!(!could_be("Edge", "Taskmgr.exe"));
+        assert!(!could_be("notion", "svchost.exe"));
+        // a key we cannot read anything from keeps the old, cautious answer
+        assert!(could_be("", "Taskmgr.exe"));
+        assert!(could_be("ab", "Taskmgr.exe"));
+    }
+
+    #[test]
+    fn the_app_is_read_from_the_profile_layout() {
+        let p = std::path::Path::new("/r/Profiles/google-chrome/work/data");
+        assert_eq!(app_of(p), "google-chrome");
+        assert_eq!(app_of(std::path::Path::new("data")), "");
     }
 
     #[test]

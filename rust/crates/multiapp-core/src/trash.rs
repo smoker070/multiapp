@@ -228,6 +228,11 @@ pub fn reveal(id: &str) -> Result<(), Error> {
 
 #[cfg(test)]
 mod tests {
+    /// A fake app no real process runs as. These tests are about clone, rename, delete and
+    /// restore; with a real name ("Edge") they also depended on what happened to be running on
+    /// the machine, and failed on a Windows runner that had an unreadable Edge-ish process.
+    const APP: &str = "Zqxtestapp";
+
     use super::*;
     use crate::profile;
 
@@ -288,16 +293,16 @@ mod tests {
     #[test]
     fn a_deleted_profile_comes_back_intact() {
         with_root(|| {
-            profile::create("Edge", "work").unwrap();
-            std::fs::write(paths::profile_data_dir("Edge", "work").unwrap().join("Cookies"), "login").unwrap();
-            let staged = profile::delete_to_trash("Edge", "work", "20260101-000000").unwrap();
+            profile::create(APP, "work").unwrap();
+            std::fs::write(paths::profile_data_dir(APP, "work").unwrap().join("Cookies"), "login").unwrap();
+            let staged = profile::delete_to_trash(APP, "work", "20260101-000000").unwrap();
             let id = staged.file_name().unwrap().to_str().unwrap().to_string();
 
             let it = list().unwrap().into_iter().find(|i| i.id == id).unwrap();
-            assert_eq!((it.app.as_deref(), it.name.as_deref(), it.restorable), (Some("Edge"), Some("work"), true));
+            assert_eq!((it.app.as_deref(), it.name.as_deref(), it.restorable), (Some(APP), Some("work"), true));
 
             restore(&id).unwrap();
-            let back = std::fs::read_to_string(paths::profile_data_dir("Edge", "work").unwrap().join("Cookies")).unwrap();
+            let back = std::fs::read_to_string(paths::profile_data_dir(APP, "work").unwrap().join("Cookies")).unwrap();
             assert_eq!(back, "login");
             assert!(list().unwrap().is_empty());
         })
@@ -306,14 +311,14 @@ mod tests {
     #[test]
     fn restore_never_overwrites_a_profile_that_exists_again() {
         with_root(|| {
-            profile::create("Edge", "work").unwrap();
-            let id = profile::delete_to_trash("Edge", "work", "20260101-000000").unwrap()
+            profile::create(APP, "work").unwrap();
+            let id = profile::delete_to_trash(APP, "work", "20260101-000000").unwrap()
                 .file_name().unwrap().to_str().unwrap().to_string();
-            profile::create("Edge", "work").unwrap();
-            std::fs::write(paths::profile_data_dir("Edge", "work").unwrap().join("Cookies"), "new").unwrap();
+            profile::create(APP, "work").unwrap();
+            std::fs::write(paths::profile_data_dir(APP, "work").unwrap().join("Cookies"), "new").unwrap();
 
             assert!(matches!(restore(&id), Err(Error::Exists(_))));
-            assert_eq!(std::fs::read_to_string(paths::profile_data_dir("Edge", "work").unwrap().join("Cookies")).unwrap(), "new");
+            assert_eq!(std::fs::read_to_string(paths::profile_data_dir(APP, "work").unwrap().join("Cookies")).unwrap(), "new");
             assert!(item_path(&id).is_ok(), "the trashed copy must still be there");
         })
     }
@@ -332,7 +337,7 @@ mod tests {
     fn an_id_cannot_leave_the_trash() {
         with_root(|| {
             mk("a__b__20260101-000000", "data/x", "x");
-            profile::create("Edge", "keep").unwrap();
+            profile::create(APP, "keep").unwrap();
             for bad in ["", ".", "..", "../Profiles", "a/b", "..\\x", "missing"] {
                 assert!(item_path(bad).is_err(), "{bad:?} must be refused");
                 assert!(restore(bad).is_err(), "{bad:?} must be refused");
@@ -343,7 +348,7 @@ mod tests {
     #[test]
     fn empty_removes_the_trash_contents_and_nothing_else() {
         with_root(|| {
-            profile::create("Edge", "keep").unwrap();
+            profile::create(APP, "keep").unwrap();
             mk("a__b__20260101-000000", "data/x", "0123456789");
             mk("claude-session-copies__20260916-174249", "RESTORE.tsv", "#\n");
             let (n, bytes) = empty().unwrap();
@@ -351,7 +356,7 @@ mod tests {
             assert!(bytes >= 10);
             assert!(list().unwrap().is_empty());
             assert!(paths::trash_root().unwrap().is_dir(), "the Trash folder itself stays");
-            assert!(paths::profile_data_dir("Edge", "keep").unwrap().is_dir(), "a live profile must survive");
+            assert!(paths::profile_data_dir(APP, "keep").unwrap().is_dir(), "a live profile must survive");
         })
     }
 }
