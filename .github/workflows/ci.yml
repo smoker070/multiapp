@@ -160,11 +160,23 @@ jobs:
     permissions:
       contents: write            # required to create a release
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+      # The release body is this version's section of RELEASE_NOTES.md ("## Multiapp X.Y.Z").
+      - name: Release notes
+        working-directory: .
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v h="## Multiapp $version" '$0==h{on=1;next} /^## /{on=0} on' RELEASE_NOTES.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::RELEASE_NOTES.md has no '## Multiapp $version' section"; exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_ENV"
       - name: Publish
         uses: softprops/action-gh-release@v2
         with:
+          name: Multiapp ${{ env.version }}
+          body_path: notes.md
           files: artifacts/**/*
-          generate_release_notes: true
