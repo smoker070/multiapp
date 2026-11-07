@@ -3,11 +3,10 @@ name: ci
 # Why this exists: the maintainer develops on macOS and has no Windows machine. This workflow is the
 # Windows test bed — it does not merely compile, it RUNS the integration test against a real Chromium
 # app (Edge, pre-installed on the runner). "It builds" was never evidence that it works.
+# Manual only. Releases are built locally (macOS) and in UTM VMs (Windows, Linux), then uploaded
+# with `gh release`; Actions on the free plan is far too slow to be the release path. Pushes and
+# tags must not start a run.
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
-  pull_request:
   workflow_dispatch:
 
 permissions:
