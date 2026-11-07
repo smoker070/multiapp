@@ -7,7 +7,7 @@
 # No binaries are modified. No env overrides needed. Keychain is never touched.
 set -euo pipefail
 
-VERSION="0.3.0"
+VERSION="0.3.3"
 
 # ================================================================ platform layer
 case "$(uname -s)" in
@@ -1650,12 +1650,22 @@ cmd_doctor() {
   info "stub tgt:  $(cat "$CONF" 2>/dev/null || echo '(unset — run: multiapp install-stub)')"
   info "profiles:  $(find "$PROFILES" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l | xargs)"
   info "trash:     $(ls "$TRASH" 2>/dev/null | wc -l | xargs) item(s)"
-  local key path missing=0
-  while IFS='|' read -r key path _; do
-    [ -n "$key" ] || continue
-    app_installed "$path" || { info "  missing app: $key ($path)"; missing=1; }
-  done <<< "$REGISTRY"
-  [ "$missing" = 0 ] && info "all registry apps installed"
+  # Only apps that HAVE profiles matter: a built-in registry entry for an app this Mac never had
+  # is not a problem, and listing those made the report look broken when nothing was.
+  local d key n bad=0
+  for d in "$PROFILES"/*/; do
+    [ -d "$d" ] || continue
+    key="$(basename "$d")"
+    n="$(find "$d" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | xargs)"
+    [ "$n" -gt 0 ] || continue
+    if resolve_app_path "$key" >/dev/null 2>&1; then
+      info "  ok:  $key — $n profile(s), app installed"
+    else
+      info "  !!   $key — $n profile(s), but the app is not installed (profiles cannot open)"; bad=1
+    fi
+  done
+  [ "$bad" = 0 ] && info "result: every app that has profiles is installed"
+  return 0
 }
 
 cmd_help() {

@@ -4,8 +4,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APPVER="0.3.0"
-BUILD="build"
+APPVER="0.3.3"
+# ".noindex" keeps Spotlight out: macOS skips any folder whose name ends in it. Without it every
+# staged copy of Multiapp.app below shows up as its own hit in Spotlight and Launchpad.
+BUILD="build.noindex"
 APP="$BUILD/Multiapp.app"
 DIST="dist"
 VOL="Multiapp"
@@ -20,10 +22,6 @@ fi
 echo "— building AppIcon.icns…"
 ICONSET="$BUILD/AppIcon.iconset"
 rm -rf "$BUILD"; mkdir -p "$ICONSET" "$DIST"
-# Keep Spotlight out of the build tree. Without this, every staged copy of Multiapp.app
-# under build/ gets indexed and shows up as its own hit in Spotlight and Launchpad — five
-# identical icons for one app, which is exactly as confusing as it sounds.
-touch "$BUILD/.metadata_never_index"
 for s in 16 32 128 256 512; do
   sips -z $s $s assets/icon_1024.png --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
   d=$((s*2))
@@ -127,7 +125,7 @@ rm -f "$RW"
 
 echo
 echo "done:"
-echo "  app:  ~/Applications/Multiapp.app   (menu-bar icon after launch)"
+echo "  app:  ~/Applications/Multiapp Menu Bar.app   (menu-bar icon after launch)"
 echo "  dmg:  $(cd "$DIST" && pwd)/Multiapp-$APPVER.dmg"
 echo
 echo "note: ad-hoc signed — fine on THIS Mac. Distributing to others needs a"

@@ -28,7 +28,7 @@
     background:var(--bg); color:var(--text);
     font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
     display:grid;
-    grid-template-columns:232px minmax(0,1fr);
+    grid-template-columns:var(--side, 232px) minmax(0,1fr);
     grid-template-rows:auto minmax(0,1fr) auto;
     overflow:hidden;
     user-select:none; -webkit-user-select:none;
@@ -49,7 +49,22 @@
     grid-row:2; grid-column:1; min-height:0;
     display:flex; flex-direction:column; gap:3px; padding:12px 10px;
     background:var(--panel); border-right:1px solid var(--line);
+    position:relative;
   }
+  /* The sidebar's right edge is draggable. Long app and profile names were cut to "Microsoft E…"
+     with no way to widen the column. */
+  .grip {
+    position:absolute; top:0; right:-4px; width:8px; height:100%; z-index:5;
+    cursor:col-resize; touch-action:none;
+  }
+  .grip::after {
+    content:""; position:absolute; top:0; bottom:0; left:3px; width:2px;
+    background:transparent; transition:background .16s;
+  }
+  .grip:hover::after, .grip.drag::after, .grip:focus-visible::after { background:var(--accent); }
+  .grip:focus-visible { outline:none; }
+  body.resizing { cursor:col-resize; }
+  body.resizing * { transition:none !important; }
   .search {
     width:100%; background:var(--bg); border:1px solid var(--line); color:var(--text);
     border-radius:9px; padding:8px 11px; font:inherit; font-size:12.5px; margin-bottom:12px;
@@ -109,11 +124,21 @@
        report you have to drag horizontally to read is a report nobody reads. */
     white-space:pre-wrap; overflow-wrap:anywhere;
   }
+  /* `hidden` must beat every display rule. `.act { display:block }` outranked the browser's own
+     [hidden] rule, so buttons meant for Claude only were shown for every app. */
+  [hidden] { display:none !important; }
+  /* The one-line answer above the raw report, in the reader's language. */
+  .verdict { margin:11px 0 2px; padding:10px 12px; border-radius:10px; font-size:12.5px; line-height:1.45;
+             background:var(--panel-2); border:1px solid var(--line); }
+  .verdict b { display:block; margin-bottom:3px; font-size:13px; }
+  .verdict.good { border-color:color-mix(in srgb,var(--ok) 55%,var(--line)); }
+  .verdict.warn { border-color:color-mix(in srgb,var(--warn) 60%,var(--line)); }
   .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 
   /* ----------------------------------------------------------------- main header */
-  .mainHead { display:flex; align-items:flex-start; gap:11px; padding:17px 16px 13px; }
-  .mainHead .ttl { flex:1; min-width:0; }
+  .mainHead { display:flex; flex-wrap:wrap; align-items:flex-start; gap:11px; padding:17px 16px 13px; }
+  .mainHead .ttl { flex:1 1 200px; min-width:0; }
+  .headBtns { display:flex; gap:11px; flex-wrap:wrap; }
   .mainHead h2 { margin:0 0 4px; font-size:18px; font-weight:680; letter-spacing:-.2px;
                  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .mainHead .sub { font-size:12.5px; color:var(--muted); }
@@ -384,8 +409,6 @@
      the Delete buttons were not red, icon tiles kept their background. Classes are not optional
      here; a test in main.rs fails the build if a style attribute comes back. */
   .swatch.bare { background:none; }
-  .inline-row { display:flex; gap:7px; align-items:center; margin-top:6px; }
-  .grow0 { flex:1; margin:0; }
   .btn.small { padding:5px 10px; font-size:11px; }
   .btn.danger, .btn.danger:hover { background:var(--danger); border-color:var(--danger); box-shadow:none; color:#fff; }
   .modal.mid  { max-width:440px; }
@@ -437,6 +460,7 @@
         <span class="nm" data-i18n="settings">Settings</span>
       </button>
     </div>
+    <div class="grip" id="sideGrip" role="separator" aria-orientation="vertical" tabindex="0"></div>
   </aside>
 
   <main>
@@ -445,9 +469,11 @@
         <h2 id="paneTitle">Multiapp</h2>
         <div class="sub" id="paneSub"></div>
       </div>
-      <button class="btn ghost" id="advBtn" data-i18n="tools">Tools</button>
-      <button class="btn ghost" id="sessBtn" data-i18n="sessions">Sessions</button>
-      <button class="btn primary" id="new" data-i18n="newProfile">New Profile</button>
+      <div class="headBtns">
+        <button class="btn ghost" id="advBtn" data-i18n="tools">Tools</button>
+        <button class="btn ghost" id="sessBtn" data-i18n="sessions">Sessions</button>
+        <button class="btn primary" id="new" data-i18n="newProfile">New Profile</button>
+      </div>
     </div>
     <div id="list"></div>
   </main>
@@ -462,6 +488,7 @@
     <button data-act="reveal" data-i18n="openFolder">Open folder</button>
     <button data-act="rename" data-i18n="rename">Rename</button>
     <button data-act="clone"  data-i18n="clone">Clone</button>
+    <button data-act="export" data-i18n="exportProfile">Export to file…</button>
     <hr>
     <button class="danger" data-act="delete" data-i18n="delete">Delete</button>
   </div>
@@ -473,10 +500,7 @@
         <label for="app" data-i18n="application">Application</label>
         <input id="app" list="apps" placeholder="Microsoft Edge" autocomplete="off">
         <datalist id="apps"></datalist>
-        <div class="inline-row">
-          <div class="hint grow0" id="appHint"></div>
-          <button class="btn ghost small" id="probeBtn" data-i18n="probe">Test</button>
-        </div>
+        <div class="hint" id="appHint"></div>
       </div>
       <label for="pname" data-i18n="profileName">Profile name</label>
       <input id="pname" placeholder="work" autocomplete="off">
@@ -537,7 +561,10 @@
         <button class="btn ghost" id="bRestore" data-i18n="restoreFrom">Restore from file…</button>
         <button class="btn ghost" id="bRescan" data-i18n="rescan">Rescan</button>
       </div>
-      <div id="appList" class="mt12"></div>
+      <label class="sr" for="tFind" data-i18n="findApp">Find an app</label>
+      <input class="search mt12" id="tFind" type="search" autocomplete="off">
+      <div id="appList"></div>
+      <div class="note center" id="appMore"></div>
       <div class="hint" id="bStatus"></div>
       <div class="actions"><button class="btn ghost" id="tClose" data-i18n="close">Close</button></div>
     </div>
@@ -563,9 +590,9 @@
       <div class="acts">
         <button class="act" id="saClaude"><b data-i18n="saClaudeT"></b><span data-i18n="saClaudeD"></span></button>
         <button class="act" id="saBackup"><b data-i18n="saBackupT"></b><span data-i18n="saBackupD"></span></button>
+        <button class="act" id="saFull"><b data-i18n="saFullT"></b><span data-i18n="saFullD"></span></button>
         <button class="act" id="saRestore"><b data-i18n="saRestoreT"></b><span data-i18n="saRestoreD"></span></button>
         <button class="act" id="saSaved"><b data-i18n="whatsSaved"></b><span data-i18n="saSavedD"></span></button>
-        <button class="act" id="saSites"><b data-i18n="sites"></b><span data-i18n="saSitesD"></span></button>
       </div>
       <div class="hint" id="saStatus"></div>
       <div class="actions">
@@ -581,6 +608,9 @@
   <div class="backdrop" id="bdSaved">
     <div class="modal mid">
       <h2><span data-i18n="whatsSaved">What's saved</span> — <span id="savedTitle"></span></h2>
+      <div class="note" data-i18n="savedHint"></div>
+      <div class="verdict" id="savedVerdict" hidden></div>
+      <label data-i18n="savedFull">Full report</label>
       <pre class="report" id="savedBody"></pre>
       <div class="note" data-i18n="savedNote"></div>
       <div class="actions"><button class="btn ghost" id="savedClose" data-i18n="close">Close</button></div>
@@ -647,14 +677,18 @@ let rows = [], busy = false, openMenu = null;
 let shownSig = null, shownKeys = new Set();
 const keyOf = p => `${p.app}\u0000${p.name}`;
 const sigOf = rs => rs.map(p => `${keyOf(p)}\u0000${p.running}\u0000${p.certain}`).join("\u0001");
-
 /* ---------------------------------------------------------------- i18n */
 const T = {
   en: { newProfile:"New Profile", tools:"Tools", settings:"Settings", theme:"Theme", dark:"Dark",
         light:"Light", system:"System", language:"Language", storage:"Profile storage", close:"Close",
         application:"Application", profileName:"Profile name", cancel:"Cancel", create:"Create",
         rename:"Rename", clone:"Clone", delete:"Delete", launch:"Launch", stop:"Stop",
-        openFolder:"Open folder", running:"running", stopped:"stopped", unknown:"unknown",
+        openFolder:"Open folder", exportProfile:"Export to file…", exporting:"Exporting",
+        evAccountFile:"sign-in file", evAccountStore:"account data", evCookiesEnc:"website cookies (encrypted)",
+        evCookiesPlain:"website cookies (readable)", evWebData:"saved web data",
+        backupLogin:"Back up login", backupAll:"Back up all", details:"Details…",
+        saFullT:"Back up everything", saFullD:"Login, chats, settings and history in one .zip. Caches are left out.",
+        running:"running", stopped:"stopped", unknown:"unknown",
         noneTitle:"No profiles yet", noneBody:"Create one to run a second, separate copy of an app — its own login, cookies and settings.",
         addStart:"＋ Start Menu", addedStart:"Added to the Start Menu",
         launching:"Launching", quitting:"Asking it to quit…", stoppedMsg:"Stopped",
@@ -668,37 +702,37 @@ const T = {
         onlyClaude:"Moving conversations works for Claude Code only. For any other app, Sessions lets you back up and restore its login instead.",
         toolsNote:"Backup, restore, export and session transfer are macOS-only for now: they are built on the Keychain and on macOS app layouts, and the Windows equivalents have not been researched yet.",
         toolsMissing:"Install the command-line tool to enable these (run ./multiapp install-stub once).",
+        savedFull:"Full report", vFiles:"files", vSites:"websites",
+        vSameMacT:"Your login is in these files", vSameMacD:"A backup keeps you signed in on this Mac. On another Mac you will need to sign in again — the key stays in this Mac's Keychain.",
+        vPortableT:"Your login is in these files", vPortableD:"A backup keeps you signed in, and may even work on another Mac. Not verified — test before relying on it.",
+        vKeychainT:"Login is probably in the Keychain", vKeychainD:"This app keeps its sign-in token in the Keychain, not in files. A backup will save settings and data, but you will likely have to sign in again.",
+        vUnknownT:"Can't tell where the login is", vUnknownD:"No readable cookie store was found. Settings and data will be backed up; whether you stay signed in is unknown.",
+        vNoneT:"Nothing to back up for the login", vNoneD:"This app keeps no sign-in files — its login lives only in the Keychain.",
         whatsSaved:"What's saved", checking:"Checking…", nothingSaved:"Nothing reported.",
         savedHint:"The full report: which files hold this app's session, and whether that login would survive a move to another Mac.",
         savedNote:"Host names and file names only. Cookie values are never read, and nothing in the Keychain is touched.",
         diagnostics:"Diagnostics", runDoctor:"Run check",
         sessPickNote:"Apps installed on this computer that keep a login session. Choose one.",
         sessNone:"No installed app with a saved session was found.",
-        saBackupT:"Back up this session", saBackupD:"Save only the files that carry the login to a .zip. Treat that file like a password.",
-        saRestoreT:"Restore a session", saRestoreD:"Write a saved session back. It merges; anything it replaces is kept in Multiapp's Trash.",
-        saSavedD:"Which files hold the session, and whether it would survive a move to another Mac.",
-        saSitesD:"Which websites the cookies belong to. Host names only.",
+        saBackupT:"Back up login only", saBackupD:"Only the files that keep you signed in, in a small .zip. Treat that file like a password.",
+        saRestoreT:"Restore from a backup", saRestoreD:"Put a backup file back. It merges; anything it replaces is kept in Multiapp's Trash.",
+        saSavedD:"Whether a backup keeps you signed in, which files hold the login, and which websites they belong to.",
         saClaudeT:"Claude Code conversations", saClaudeD:"Copy conversations between profiles and accounts.",
         wrongArchive:"That archive belongs to a different app, so nothing was restored:",
         search:"Search", allApps:"All apps", apps:"Apps", searchLabel:"Search apps and profiles",
         noMatch:"Nothing matches", noMatchBody:"No app or profile matches what you typed.",
         moreActions:"More actions",
-        sites:"Sites in backup", measuring:"measuring…",
-        sitesHint:"Which websites this app's cookies belong to. Host names only — Multiapp never reads cookie values, so it cannot tell you whether you are signed in.",
-        probe:"Test", probing:"Testing — an app window will open briefly…",
-        probeYes:"This app honours the flag — profiles will work", probeNo:"This app ignored the flag — it sets its own data directory, so profiles will not isolate it",
-        probeLeft:"the test instance is still open; close it yourself", cookiesIn:"cookies across",
-        siteHint:"Whose cookies these are is what tells you whether a login is involved.",
-        backupRestore:"Backup & Restore", backupNote:"Archive an app's local data, or just the files that carry its login. A restore MERGES — it never deletes anything the archive did not contain, and whatever it replaces is kept in Multiapp's Trash.",
-        restoreFrom:"Restore from file…", rescan:"Rescan", full:"Full", loginOnly:"Login only",
-        scanning:"Scanning applications…", noApps:"No applications with a saved session were found.",
+        measuring:"measuring…",
+        backupRestore:"Backup & Restore", backupNote:"Back up login saves only the sign-in files (small). Back up all saves everything the app keeps on this Mac. Restore or import puts any Multiapp file back — app backups and exported profiles alike. Nothing is deleted; whatever it replaces goes to Multiapp's Trash.",
+        restoreFrom:"Restore or import a file…", rescan:"Rescan", full:"Back up all", loginOnly:"Back up login",
+        scanning:"Scanning applications…", findApp:"Find an app", resizeSide:"Drag to resize · double-click to reset", noMatch:"No app matches.", scrollMore:"scroll for more", noApps:"No applications with a saved session were found.",
         saveAs:"Save backup as", chooseArchive:"Choose a Multiapp archive", backingUp:"Backing up",
         restoring:"Restoring…", done:"Done", archiveHolds:"This archive holds",
         credentialWarning:"An archive can contain a live login. Treat it like a password.",
         sessions:"Sessions", sessionsTitle:"Claude Code sessions",
         sessionsNote:"Copy sessions between profiles. Each copy is independent — new ids and its own transcript — so the two profiles never write to one conversation. The originals stay where they are.",
         from:"From", to:"To", selectAll:"Select all", selectNone:"Select none",
-        transfer:"Transfer", exportSel:"Export…", importFile:"Import…",
+        transfer:"Transfer", exportSel:"Export chats…", importFile:"Import chats…",
         loadingSessions:"Reading sessions…", noSessionsIn:"no sessions in",
         pickSome:"Tick at least one session.", sameProfile:"Source and destination must differ.",
         transferring:"Copying sessions…", restartDest:"Restart that profile to see them.",
@@ -725,7 +759,12 @@ const T = {
         light:"Yorug‘", system:"Tizim", language:"Til", storage:"Profillar joyi", close:"Yopish",
         application:"Ilova", profileName:"Profil nomi", cancel:"Bekor qilish", create:"Yaratish",
         rename:"Nomini o‘zgartirish", clone:"Nusxa olish", delete:"O‘chirish", launch:"Ochish", stop:"To‘xtatish",
-        openFolder:"Papkani ochish", running:"ishlamoqda", stopped:"to‘xtagan", unknown:"noma’lum",
+        openFolder:"Papkani ochish", exportProfile:"Faylga eksport…", exporting:"Eksport qilinmoqda",
+        evAccountFile:"kirish fayli", evAccountStore:"akkaunt ma’lumotlari", evCookiesEnc:"sayt cookie’lari (shifrlangan)",
+        evCookiesPlain:"sayt cookie’lari (ochiq)", evWebData:"saqlangan veb-ma’lumotlar",
+        backupLogin:"Loginni saqlash", backupAll:"Hammasini saqlash", details:"Batafsil…",
+        saFullT:"Hammasini zaxiralash", saFullD:"Login, suhbatlar, sozlamalar va tarix bitta .zip faylda. Kesh olinmaydi.",
+        running:"ishlamoqda", stopped:"to‘xtagan", unknown:"noma’lum",
         noneTitle:"Hali profil yo‘q", noneBody:"Ilovaning ikkinchi, alohida nusxasini ishlatish uchun profil yarating — o‘z logini, cookie va sozlamalari bilan.",
         addStart:"＋ Start menyusi", addedStart:"Start menyusiga qo‘shildi",
         launching:"Ochilmoqda", quitting:"Yopishni so‘ramoqda…", stoppedMsg:"To‘xtatildi",
@@ -739,37 +778,37 @@ const T = {
         onlyClaude:"Suhbatlarni koʻchirish faqat Claude Code uchun ishlaydi. Boshqa ilovalar uchun Sessiyalar boʻlimida loginni zaxiralash va tiklash mumkin.",
         toolsNote:"Zaxiralash, tiklash, eksport va sessiya ko‘chirish hozircha faqat macOS uchun: ular Keychain va macOS ilova tuzilishiga asoslangan, Windows uchun ekvivalenti hali o‘rganilmagan.",
         toolsMissing:"Bularni yoqish uchun buyruq qatori vositasini o‘rnating (bir marta ./multiapp install-stub).",
+        savedFull:"Toʻliq hisobot", vFiles:"fayl", vSites:"sayt",
+        vSameMacT:"Login shu fayllarda", vSameMacD:"Zaxira shu Mac'da tizimda qolishingizni saqlaydi. Boshqa Mac'da qayta kirish kerak boʻladi — kalit shu Mac'ning Keychain'ida qoladi.",
+        vPortableT:"Login shu fayllarda", vPortableD:"Zaxira tizimda qolishingizni saqlaydi, balki boshqa Mac'da ham ishlaydi. Tekshirilmagan — ishonishdan oldin sinab koʻring.",
+        vKeychainT:"Login, ehtimol, Keychain'da", vKeychainD:"Bu ilova kirish tokenini fayllarda emas, Keychain'da saqlaydi. Zaxira sozlama va maʼlumotlarni saqlaydi, lekin qayta kirishingiz kerak boʻlishi mumkin.",
+        vUnknownT:"Login qayerdaligini aniqlab boʻlmadi", vUnknownD:"Oʻqiladigan cookie bazasi topilmadi. Sozlama va maʼlumotlar zaxiralanadi; tizimda qolasizmi — nomaʼlum.",
+        vNoneT:"Login uchun saqlanadigan fayl yoʻq", vNoneD:"Bu ilova kirish fayllarini saqlamaydi — login faqat Keychain'da.",
         whatsSaved:"Nima saqlangan", checking:"Tekshirilmoqda…", nothingSaved:"Hech narsa topilmadi.",
         savedHint:"Toʻliq hisobot: bu ilovaning sessiyasi qaysi fayllarda va u login boshqa Mac'ga koʻchirilganda ishlaydimi.",
         savedNote:"Faqat sayt va fayl nomlari. Cookie qiymatlari hech qachon oʻqilmaydi, Keychain'ga tegilmaydi.",
         diagnostics:"Diagnostika", runDoctor:"Tekshirish",
         sessPickNote:"Shu kompyuterga oʻrnatilgan va login sessiyasini saqlaydigan ilovalar. Birini tanlang.",
         sessNone:"Sessiyasi saqlangan oʻrnatilgan ilova topilmadi.",
-        saBackupT:"Sessiyani zaxiralash", saBackupD:"Faqat login fayllarini .zip ga saqlaydi. Bu faylni parol kabi asrang.",
-        saRestoreT:"Sessiyani tiklash", saRestoreD:"Saqlangan sessiyani qaytaradi. Birlashtiradi; almashtirilgan fayllar Multiapp savatida qoladi.",
-        saSavedD:"Sessiya qaysi fayllarda va boshqa Mac'ga koʻchirilganda ishlaydimi.",
-        saSitesD:"Cookie'lar qaysi saytlarga tegishli. Faqat sayt nomlari.",
+        saBackupT:"Faqat loginni zaxiralash", saBackupD:"Faqat tizimga kirgan holatni saqlovchi fayllar, kichik .zip faylda. Bu faylni parol kabi asrang.",
+        saRestoreT:"Zaxiradan tiklash", saRestoreD:"Zaxira faylini qaytaradi. Birlashtiradi; almashtirilgan fayllar Multiapp savatida qoladi.",
+        saSavedD:"Zaxira tizimda qolishingizni saqlaydimi, login qaysi fayllarda va ular qaysi saytlarga tegishli.",
         saClaudeT:"Claude Code suhbatlari", saClaudeD:"Suhbatlarni profillar va akkauntlar orasida nusxalash.",
         wrongArchive:"Bu arxiv boshqa ilovaga tegishli, shuning uchun hech narsa tiklanmadi:",
         search:"Qidirish", allApps:"Barcha ilovalar", apps:"Ilovalar", searchLabel:"Ilova va profillarni qidirish",
         noMatch:"Hech narsa topilmadi", noMatchBody:"Siz yozgan narsaga mos ilova yoki profil yoʻq.",
         moreActions:"Boshqa amallar",
-        sites:"Arxivdagi saytlar", measuring:"oʻlchanmoqda…",
-        sitesHint:"Bu ilovaning cookie'lari qaysi saytlarga tegishli. Faqat sayt nomlari — Multiapp cookie qiymatlarini hech qachon oʻqimaydi, shuning uchun tizimga kirgan-kirmaganingizni ayta olmaydi.",
-        probe:"Sinash", probing:"Sinalmoqda — ilova oynasi qisqa vaqt ochiladi…",
-        probeYes:"Bu ilova flagni qabul qiladi — profillar ishlaydi", probeNo:"Bu ilova flagni e’tiborsiz qoldirdi — o‘z papkasini o‘zi belgilaydi, shuning uchun profillar ajratmaydi",
-        probeLeft:"sinov nusxasi hali ochiq; uni o‘zingiz yoping", cookiesIn:"cookie,",
-        siteHint:"Cookie’lar kimga tegishli ekani login bor-yo‘qligini ko‘rsatadi.",
-        backupRestore:"Zaxira va tiklash", backupNote:"Ilovaning mahalliy ma’lumotlarini yoki faqat login fayllarini saqlang. Tiklash QO‘SHADI — arxivda bo‘lmagan hech narsani o‘chirmaydi, almashtirilgani esa Multiapp savatida saqlanadi.",
-        restoreFrom:"Fayldan tiklash…", rescan:"Qayta skanerlash", full:"To‘liq", loginOnly:"Faqat login",
-        scanning:"Ilovalar skanerlanmoqda…", noApps:"Saqlangan sessiyasi bor ilova topilmadi.",
+        measuring:"oʻlchanmoqda…",
+        backupRestore:"Zaxira va tiklash", backupNote:"«Loginni saqlash» faqat kirish fayllarini saqlaydi (kichik). «Hammasini saqlash» ilova shu Mac’da saqlagan hamma narsani oladi. «Tiklash yoki import» har qanday Multiapp faylini qaytaradi — ilova zaxirasini ham, eksport qilingan profilni ham. Hech narsa o‘chirilmaydi; almashtirilgani Multiapp savatiga tushadi.",
+        restoreFrom:"Tiklash yoki import…", rescan:"Qayta skanerlash", full:"Hammasini saqlash", loginOnly:"Loginni saqlash",
+        scanning:"Ilovalar skanerlanmoqda…", findApp:"Ilovani topish", resizeSide:"Kenglikni oʻzgartirish uchun torting · asl holiga — ikki marta bosing", noMatch:"Mos ilova yoʻq.", scrollMore:"koʻproq uchun pastga suring", noApps:"Saqlangan sessiyasi bor ilova topilmadi.",
         saveAs:"Zaxirani saqlash", chooseArchive:"Multiapp arxivini tanlang", backingUp:"Saqlanmoqda",
         restoring:"Tiklanmoqda…", done:"Tayyor", archiveHolds:"Bu arxivda",
         credentialWarning:"Arxivda tirik login bo‘lishi mumkin. Uni parol kabi saqlang.",
         sessions:"Sessiyalar", sessionsTitle:"Claude Code sessiyalari",
         sessionsNote:"Sessiyalarni profillar orasida ko‘chiring. Har bir nusxa mustaqil — yangi id va o‘z transkripti — shuning uchun ikki profil bitta suhbatga yozmaydi. Asl nusxalar joyida qoladi.",
         from:"Qayerdan", to:"Qayerga", selectAll:"Hammasini tanlash", selectNone:"Tanlovni bekor qilish",
-        transfer:"Ko‘chirish", exportSel:"Eksport…", importFile:"Import…",
+        transfer:"Ko‘chirish", exportSel:"Suhbatlarni eksport…", importFile:"Suhbatlarni import…",
         loadingSessions:"Sessiyalar o‘qilmoqda…", noSessionsIn:"sessiya yo‘q:",
         pickSome:"Kamida bitta sessiyani belgilang.", sameProfile:"Manba va manzil har xil bo‘lishi kerak.",
         transferring:"Sessiyalar ko‘chirilmoqda…", restartDest:"Ko‘rish uchun o‘sha profilni qayta ishga tushiring.",
@@ -796,7 +835,12 @@ const T = {
         light:"Светлая", system:"Системная", language:"Язык", storage:"Хранилище профилей", close:"Закрыть",
         application:"Приложение", profileName:"Имя профиля", cancel:"Отмена", create:"Создать",
         rename:"Переименовать", clone:"Клонировать", delete:"Удалить", launch:"Запустить", stop:"Остановить",
-        openFolder:"Открыть папку", running:"работает", stopped:"остановлен", unknown:"неизвестно",
+        openFolder:"Открыть папку", exportProfile:"Экспорт в файл…", exporting:"Экспорт",
+        evAccountFile:"файл входа", evAccountStore:"данные аккаунта", evCookiesEnc:"куки сайтов (зашифрованы)",
+        evCookiesPlain:"куки сайтов (открытые)", evWebData:"сохранённые веб-данные",
+        backupLogin:"Сохранить вход", backupAll:"Сохранить всё", details:"Подробнее…",
+        saFullT:"Сохранить всё", saFullD:"Вход, чаты, настройки и история в одном .zip. Кэш не сохраняется.",
+        running:"работает", stopped:"остановлен", unknown:"неизвестно",
         noneTitle:"Профилей пока нет", noneBody:"Создайте профиль, чтобы запустить вторую, отдельную копию приложения — со своим входом, куками и настройками.",
         addStart:"＋ Меню «Пуск»", addedStart:"Добавлено в меню «Пуск»",
         launching:"Запуск", quitting:"Просим приложение закрыться…", stoppedMsg:"Остановлен",
@@ -810,37 +854,37 @@ const T = {
         onlyClaude:"Перенос разговоров работает только для Claude Code. Для остальных приложений в разделе «Сессии» можно сохранить и восстановить вход.",
         toolsNote:"Резервное копирование, восстановление, экспорт и перенос сессий пока только для macOS: они построены на Keychain и структуре приложений macOS, а эквиваленты для Windows ещё не исследованы.",
         toolsMissing:"Установите инструмент командной строки, чтобы включить это (один раз ./multiapp install-stub).",
+        savedFull:"Полный отчёт", vFiles:"файлов", vSites:"сайтов",
+        vSameMacT:"Вход хранится в этих файлах", vSameMacD:"Копия сохранит вход на этом Mac. На другом Mac придётся войти заново — ключ остаётся в Keychain этого Mac.",
+        vPortableT:"Вход хранится в этих файлах", vPortableD:"Копия сохранит вход и, возможно, сработает на другом Mac. Не проверено — проверьте, прежде чем полагаться.",
+        vKeychainT:"Вход, скорее всего, в Keychain", vKeychainD:"Приложение хранит токен входа в Keychain, а не в файлах. Копия сохранит настройки и данные, но войти, скорее всего, придётся заново.",
+        vUnknownT:"Не удалось понять, где вход", vUnknownD:"Читаемая база cookie не найдена. Настройки и данные будут сохранены; сохранится ли вход — неизвестно.",
+        vNoneT:"Для входа сохранять нечего", vNoneD:"Приложение не хранит файлов входа — вход только в Keychain.",
         whatsSaved:"Что сохранено", checking:"Проверка…", nothingSaved:"Ничего не найдено.",
         savedHint:"Полный отчёт: в каких файлах лежит сессия приложения и переживёт ли этот вход переезд на другой Mac.",
         savedNote:"Только имена сайтов и файлов. Значения cookie не читаются, Keychain не затрагивается.",
         diagnostics:"Диагностика", runDoctor:"Проверить",
         sessPickNote:"Установленные на этом компьютере приложения, которые хранят сессию входа. Выберите одно.",
         sessNone:"Установленных приложений с сохранённой сессией не найдено.",
-        saBackupT:"Сохранить эту сессию", saBackupD:"Сохраняет в .zip только файлы входа. Храните этот файл как пароль.",
-        saRestoreT:"Восстановить сессию", saRestoreD:"Возвращает сохранённую сессию. Объединяет; всё заменённое остаётся в корзине Multiapp.",
-        saSavedD:"В каких файлах лежит сессия и переживёт ли она переезд на другой Mac.",
-        saSitesD:"Каким сайтам принадлежат cookie. Только имена сайтов.",
+        saBackupT:"Сохранить только вход", saBackupD:"Только файлы, которые держат вас в аккаунте, в небольшом .zip. Храните этот файл как пароль.",
+        saRestoreT:"Восстановить из копии", saRestoreD:"Возвращает файл резервной копии. Объединяет; всё заменённое остаётся в корзине Multiapp.",
+        saSavedD:"Сохранит ли копия вход, в каких файлах он лежит и каким сайтам они принадлежат.",
         saClaudeT:"Разговоры Claude Code", saClaudeD:"Копирование разговоров между профилями и аккаунтами.",
         wrongArchive:"Этот архив принадлежит другому приложению, поэтому ничего не восстановлено:",
         search:"Поиск", allApps:"Все приложения", apps:"Приложения", searchLabel:"Поиск приложений и профилей",
         noMatch:"Ничего не найдено", noMatchBody:"Нет приложения или профиля, подходящего под запрос.",
         moreActions:"Ещё действия",
-        sites:"Сайты в копии", measuring:"измерение…",
-        sitesHint:"Каким сайтам принадлежат cookie этого приложения. Только имена сайтов — Multiapp никогда не читает значения cookie и не может сказать, вошли ли вы.",
-        probe:"\u041f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c", probing:"Проверка — окно приложения откроется ненадолго…",
-        probeYes:"Приложение принимает флаг — профили будут работать", probeNo:"Приложение проигнорировало флаг — оно задаёт свою папку данных, поэтому профили его не изолируют",
-        probeLeft:"тестовая копия ещё открыта; закройте её сами", cookiesIn:"куки в",
-        siteHint:"Кому принадлежат куки — вот что показывает, есть ли вход.",
-        backupRestore:"Резервное копирование", backupNote:"Сохраните данные приложения или только файлы входа. Восстановление ДОБАВЛЯЕТ — оно не удаляет то, чего не было в архиве, а заменённое сохраняется в корзине Multiapp.",
-        restoreFrom:"Восстановить из файла…", rescan:"Пересканировать", full:"Полностью", loginOnly:"Только вход",
-        scanning:"Сканирование приложений…", noApps:"Приложений с сохранённой сессией не найдено.",
+        measuring:"измерение…",
+        backupRestore:"Резервное копирование", backupNote:"«Сохранить вход» сохраняет только файлы входа (немного). «Сохранить всё» — всё, что приложение хранит на этом Mac. «Восстановить или импорт» возвращает любой файл Multiapp — и резервную копию приложения, и экспортированный профиль. Ничего не удаляется; заменённое попадает в корзину Multiapp.",
+        restoreFrom:"Восстановить или импорт…", rescan:"Пересканировать", full:"Сохранить всё", loginOnly:"Сохранить вход",
+        scanning:"Сканирование приложений…", findApp:"Найти приложение", resizeSide:"Потяните, чтобы изменить ширину · двойной щелчок — сброс", noMatch:"Ничего не найдено.", scrollMore:"прокрутите, чтобы увидеть ещё", noApps:"Приложений с сохранённой сессией не найдено.",
         saveAs:"Сохранить резервную копию", chooseArchive:"Выберите архив Multiapp", backingUp:"Сохранение",
         restoring:"Восстановление…", done:"Готово", archiveHolds:"В этом архиве",
         credentialWarning:"Архив может содержать активный вход. Храните его как пароль.",
         sessions:"Сессии", sessionsTitle:"Сессии Claude Code",
         sessionsNote:"Копируйте сессии между профилями. Каждая копия независима — новые id и собственный транскрипт, — поэтому два профиля не пишут в один разговор. Оригиналы остаются на месте.",
         from:"Откуда", to:"Куда", selectAll:"Выбрать все", selectNone:"Снять выбор",
-        transfer:"Перенести", exportSel:"Экспорт…", importFile:"Импорт…",
+        transfer:"Перенести", exportSel:"Экспорт чатов…", importFile:"Импорт чатов…",
         loadingSessions:"Чтение сессий…", noSessionsIn:"нет сессий в",
         pickSome:"Отметьте хотя бы одну сессию.", sameProfile:"Источник и назначение должны отличаться.",
         transferring:"Копирование сессий…", restartDest:"Перезапустите этот профиль, чтобы увидеть их.",
@@ -871,6 +915,8 @@ function applyLang() {
   document.querySelectorAll("[data-i18n]").forEach(e => { e.textContent = t(e.dataset.i18n); });
   // A placeholder is an attribute, not text, so the sweep above cannot reach it.
   $("q").placeholder = t("search");
+  $("tFind").placeholder = t("findApp");
+  $("sideGrip").title = t("resizeSide");
   render();   // same data, new words: render() animates nothing because the keys are unchanged
 }
 
@@ -1093,6 +1139,7 @@ async function act(kind, p, el) {
   if (busy) return;
   if (kind === "rename" || kind === "clone") return openProfileDialog(kind, p);
   if (kind === "delete") return confirmDelete(p);
+  if (kind === "export") return exportProfile(p);
 
   lock(true);
   try {
@@ -1204,6 +1251,35 @@ $("cOk").onclick = async () => {
   } catch (e) { say(e, "err"); $("bdConfirm").classList.remove("open"); }
 };
 
+/* ---------------------------------------------------------------- sidebar width */
+// Drag the edge, or focus it and use ← →. Double-click puts it back. Remembered per machine.
+const SIDE_MIN = 170, SIDE_DEFAULT = 232;
+const sideMax = () => Math.max(SIDE_MIN, Math.min(480, innerWidth - 340));
+function setSide(w, save = true) {
+  w = Math.round(Math.max(SIDE_MIN, Math.min(sideMax(), w)));
+  document.body.style.setProperty("--side", `${w}px`);
+  $("sideGrip").setAttribute("aria-valuenow", w);
+  if (save) try { localStorage.setItem("sideW", String(w)); } catch (_) {}
+}
+try { const w = +localStorage.getItem("sideW"); if (w) setSide(w, false); } catch (_) {}
+$("sideGrip").onpointerdown = e => {
+  const g = $("sideGrip"), left = document.querySelector("aside").getBoundingClientRect().left;
+  g.setPointerCapture(e.pointerId); g.classList.add("drag"); document.body.classList.add("resizing");
+  g.onpointermove = m => setSide(m.clientX - left, false);
+  g.onpointerup = m => {
+    g.onpointermove = g.onpointerup = null;
+    g.classList.remove("drag"); document.body.classList.remove("resizing");
+    setSide(m.clientX - left);
+  };
+  e.preventDefault();
+};
+$("sideGrip").ondblclick = () => setSide(SIDE_DEFAULT);
+$("sideGrip").onkeydown = e => {
+  const cur = document.querySelector("aside").getBoundingClientRect().width;
+  if (e.key === "ArrowLeft")  { setSide(cur - 16); e.preventDefault(); }
+  if (e.key === "ArrowRight") { setSide(cur + 16); e.preventDefault(); }
+};
+
 /* ---------------------------------------------------------------- settings */
 $("settings").onclick = async () => {
   closeMenus();
@@ -1241,60 +1317,138 @@ $("langSeg").onclick = e => {
 
 /* ---------------------------------------------------------------- backup & restore */
 const dialog = () => window.__TAURI__.dialog;
+// The backend names evidence in English; the label a person reads follows the chosen language.
+const EV = { "account file":"evAccountFile", "account store":"evAccountStore",
+             "cookies (encrypted)":"evCookiesEnc", "cookies (plaintext)":"evCookiesPlain",
+             "local web data":"evWebData" };
+const evText = e => (EV[e] ? t(EV[e]) : e);
 const human = b => { const u=["B","KB","MB","GB","TB"]; let v=b,i=0; while(v>=1024&&i<u.length-1){v/=1024;i++;} return i?`${v.toFixed(1)} ${u[i]}`:`${b} B`; };
 // Whether the bash CLI is installed. session-check runs through it, so the button that calls
 // it is hidden rather than offered and then failing. Set once at start-up.
 let hasCli = false;
 let apps = [];
 
-// Sizes arrive after the list is already on screen, one app at a time.
-//
-// They used to arrive with it, and that is what made this window sit on a spinner: the backend
-// summed every byte each app owns before it would answer, and Claude's tree alone is 15.9 GB.
-// Measuring is still slow — it is the same walk — but it is nobody's blocker now, and each row
-// fills in on its own. Serial on purpose: twenty parallel disk walks make all twenty slower.
-async function measureSizes(box) {
-  const token = ++measureSizes.run;   // a second open supersedes the first; drop the stale one
-  for (const el of box.querySelectorAll("[data-sz]")) {
+// Sizes arrive after the list is already on screen: the backend used to sum every byte before it
+// answered, and Claude's tree alone is 15.9 GB.
+// Kept between openings: Claude's folder alone takes six seconds to measure, and paying that every
+// time the sheet opens is what made it feel slow. Rescan clears it.
+const appSizeCache = new Map();
+// Sizes are measured one row at a time, only for rows that are on screen, in the order they
+// appeared. One worker drains the queue: twenty parallel disk walks make all twenty slower.
+const sizeQueue = [];
+let sizeWorker = null;
+function queueSizes(els) {
+  sizeQueue.push(...els);
+  if (!sizeWorker) sizeWorker = drainSizes().finally(() => { sizeWorker = null; });
+}
+async function drainSizes() {
+  while (sizeQueue.length) {
+    const el = sizeQueue.shift();
     const a = apps[+el.dataset.sz];
-    if (!a) continue;
-    try {
-      const bytes = await invoke("app_data_size", { app: a.name });
-      if (token !== measureSizes.run) return;
-      el.textContent = human(bytes);
-    } catch {
-      if (token !== measureSizes.run) return;
-      el.textContent = "—";           // unreadable is not zero, and must not be shown as "0 B"
+    if (!a || !el.isConnected) continue;      // row gone (rescan, new search): skip its walk
+    if (!appSizeCache.has(a.name)) {
+      try { appSizeCache.set(a.name, await invoke("app_data_size", { app: a.name })); }
+      catch { appSizeCache.set(a.name, null); }
     }
+    const b = appSizeCache.get(a.name);
+    el.textContent = b == null ? "—" : human(b);   // unreadable is not zero, never "0 B"
   }
 }
-measureSizes.run = 0;
+
+// The list arrives in pages of 15. Building every row at once — and queueing a disk walk for every
+// one of them — is what a Mac with a hundred apps paid for on each open. More rows load as the
+// list is scrolled to its end; the search box finds an app without scrolling at all.
+const PAGE = 15;
+let toolsView = [], toolsShown = 0;
+
+function appRow(a, i) {
+  return `<div class="arow">
+      <span class="n"><b>${esc(a.name)}</b><span>${esc(evText(a.evidence))} · <span class="sz" data-sz="${i}">${esc(t("measuring"))}</span></span></span>
+      <button class="btn ghost" data-b="${i}" data-full="0">${esc(t("loginOnly"))}</button>
+      <button class="btn ghost" data-b="${i}" data-full="1">${esc(t("full"))}</button>
+      <button class="btn ghost" data-more="${i}">${esc(t("details"))}</button>
+    </div>`;
+}
+
+function showMoreApps() {
+  const box = $("appList");
+  const next = toolsView.slice(toolsShown, toolsShown + PAGE);
+  const before = box.children.length;
+  box.insertAdjacentHTML("beforeend", next.map(i => appRow(apps[i], i)).join(""));
+  const added = [...box.children].slice(before);
+  added.forEach((el, k) => { el.style.animationDelay = `${Math.min(k, 10) * 18}ms`; });
+  toolsShown += next.length;
+  queueSizes(added.map(el => el.querySelector("[data-sz]")));
+  const more = $("appMore");
+  more.textContent = !toolsView.length ? (apps.length ? t("noMatch") : "")
+    : toolsShown < toolsView.length ? `${toolsShown} / ${toolsView.length} — ${t("scrollMore")}` : "";
+  // A tall window can show the whole first page with nothing to scroll; keep filling it.
+  if (toolsShown < toolsView.length && toolsSheet.scrollHeight <= toolsSheet.clientHeight + 140) showMoreApps();
+}
+
+function filterApps() {
+  const q = $("tFind").value.trim().toLowerCase();
+  toolsView = apps.map((_, i) => i).filter(i => !q || apps[i].name.toLowerCase().includes(q));
+  toolsShown = 0;
+  sizeQueue.length = 0;
+  $("appList").innerHTML = "";
+  showMoreApps();
+}
+
+// Reaching the bottom of the sheet loads the next page. A plain scroll check, not an
+// IntersectionObserver: the observer stays silent in a window that is not being painted.
+const toolsSheet = document.querySelector("#bdTools .modal");
+function nearEnd() {
+  return toolsSheet.scrollTop + toolsSheet.clientHeight >= toolsSheet.scrollHeight - 140;
+}
+toolsSheet.addEventListener("scroll", () => {
+  if (toolsShown < toolsView.length && nearEnd()) showMoreApps();
+}, { passive: true });
 
 async function loadApps() {
   const box = $("appList");
   box.innerHTML = `<div class="note">${esc(t("scanning"))}</div>`;
+  $("appMore").textContent = "";
+  toolsView = []; toolsShown = 0;
   try {
     apps = await invoke("list_app_data");
   } catch (e) { box.innerHTML = `<div class="hint bad">${esc(String(e))}</div>`; return; }
   if (!apps.length) { box.innerHTML = `<div class="note">${esc(t("noApps"))}</div>`; return; }
-  box.innerHTML = apps.map((a, i) => `<div class="arow">
-      <span class="n"><b>${esc(a.name)}</b><span>${esc(a.evidence)} · <span class="sz" data-sz="${i}">${esc(t("measuring"))}</span></span></span>
-      <button class="btn ghost" data-saved="${i}" title="${esc(t("savedHint"))}"${hasCli ? "" : " hidden"}>${esc(t("whatsSaved"))}</button>
-      <button class="btn ghost" data-sites="${i}" title="${esc(t("sitesHint"))}">${esc(t("sites"))}</button>
-      <button class="btn ghost" data-b="${i}" data-full="1">${esc(t("full"))}</button>
-      <button class="btn ghost" data-b="${i}" data-full="0">${esc(t("loginOnly"))}</button>
-    </div>`).join("");
-  stagger(box, ".arow", 18, 10);
-  measureSizes(box);
-  box.querySelectorAll("[data-sites]").forEach(btn => {
-    btn.onclick = () => showSites(apps[+btn.dataset.sites]);
-  });
-  box.querySelectorAll("[data-saved]").forEach(btn => {
-    btn.onclick = () => showSaved(apps[+btn.dataset.saved]);
-  });
-  box.querySelectorAll("[data-b]").forEach(btn => {
-    btn.onclick = () => doBackup(apps[+btn.dataset.b], btn.dataset.full === "1");
-  });
+  filterApps();
+}
+$("tFind").oninput = filterApps;
+
+// One handler for every row, however many pages have loaded.
+// "Details" opens the per-app sheet the Sessions button leads to, where every action carries a
+// sentence saying what it does.
+$("appList").onclick = e => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  if (btn.dataset.more !== undefined) {
+    const a = apps[+btn.dataset.more];
+    $("bdTools").classList.remove("open");
+    openSessApp({ name: a.name, app: a.name, evidence: a.evidence });
+  } else if (btn.dataset.b !== undefined) {
+    doBackup(apps[+btn.dataset.b], btn.dataset.full === "1");
+  }
+};
+
+// A whole profile into one file. Restoring that file (Tools → Restore or import a file) brings the
+// profile back under the same name — the same path the app-data backups take.
+async function exportProfile(p) {
+  try {
+    const path = await dialog().save({
+      title: t("exportProfile"),
+      defaultPath: `multiapp-profile-${`${p.app}-${p.name}`.replace(/[^A-Za-z0-9._-]/g, "-")}.zip`,
+      filters: [{ name: "Multiapp archive", extensions: ["zip"] }],
+    });
+    if (!path) return;
+    lock(true);
+    say(`${t("exporting")} ${p.app} · ${p.name}…`);
+    const msg = await invoke("export_profile", { app: p.app, name: p.name, out: path });
+    say(`${t("done")} — ${msg}. ${t("credentialWarning")}`, "ok");
+  } catch (e) { say(e, "err"); }
+  lock(false);
 }
 
 async function doBackup(a, full, st = $("bStatus")) {
@@ -1336,56 +1490,53 @@ async function restoreFromFile(st, onlyFor = null) {
     st.textContent = t("restoring"); st.className = "hint";
     st.textContent = await invoke("restore_archive", { path });
     st.className = "hint good";
+    refresh(true);   // a restored profile export belongs back in the main list
   } catch (e) { st.textContent = String(e); st.className = "hint bad"; }
 }
 $("bRestore").onclick = () => restoreFromFile($("bStatus"));
 
-async function showSites(a, st = $("bStatus")) {
-  st.textContent = "…"; st.className = "hint";
-  try {
-    const c = await invoke("cookie_report", { app: a.name });
-    if (!c.total) { st.textContent = `${a.name}: 0`; return; }
-    const top = c.hosts.slice(0, 6).map(([h, n]) => `${n}× ${h}`).join("  ·  ");
-    st.innerHTML = "";                      // textContent below; never HTML from a host name
-    st.textContent = `${a.name}: ${c.total} ${t("cookiesIn")} ${c.hosts.length} — ${top}`;
-    st.className = "hint";
-    say(t("siteHint"));
-  } catch (e) { st.textContent = String(e); st.className = "hint bad"; }
-}
-
 // The full "what is actually saved for this app" report, straight from the CLI's session-check.
-// `cookie_report` above answers only which hosts the cookies belong to; this one also names the
-// files it found and whether the login would survive a move to another machine — the honest
-// answer to "what will a backup of this actually contain". macOS-only, because the CLI is.
+// It names the files it found, which websites the cookies belong to, and whether the login would
+// survive a move to another machine — the honest answer to "what will a backup of this actually
+// contain". macOS-only, because the CLI is.
+// The CLI's verdict lines are fixed English sentences this project writes itself, so they are
+// matched to a translated summary. The files and site names below stay verbatim.
+const VERDICTS = [
+  ["login: encrypted cookies found",  "good", "vSameMac"],
+  ["login: unencrypted cookies found","good", "vPortable"],
+  ["login: likely NOT in these files","warn", "vKeychain"],
+  ["login: can't tell",               "warn", "vUnknown"],
+  ["login: no session files",         "warn", "vNone"],
+];
 async function showSaved(a) {
-  const box = $("savedBody"), st = $("bStatus");
+  const box = $("savedBody"), st = $("bStatus"), v = $("savedVerdict");
   $("savedTitle").textContent = a.name;
   box.textContent = t("checking");
+  v.hidden = true;
   $("bdSaved").classList.add("open");
   try {
-    const report = await invoke("session_check", { app: a.name });
+    const report = (await invoke("session_check", { app: a.name })).trim();
     // textContent, never innerHTML: this is CLI output about files on disk, not markup.
-    box.textContent = report.trim() || t("nothingSaved");
+    box.textContent = report || t("nothingSaved");
+    const hit = VERDICTS.find(([line]) => report.includes(line));
+    const files = (report.match(/data found: (\d+) item/) || [])[1];
+    const sites = (report.match(/across (\d+) site/) || [])[1];
+    if (hit) {
+      v.className = "verdict " + hit[1];
+      v.replaceChildren();
+      const b = document.createElement("b");
+      b.textContent = t(hit[2] + "T");
+      const p = document.createElement("span");
+      const facts = [files && `${files} ${t("vFiles")}`, sites && `${sites} ${t("vSites")}`].filter(Boolean).join(" · ");
+      p.textContent = t(hit[2] + "D") + (facts ? ` (${facts})` : "");
+      v.append(b, p);
+      v.hidden = false;
+    }
   } catch (e) {
     box.textContent = String(e);
     st.textContent = String(e); st.className = "hint bad";
   }
 }
-
-$("probeBtn").onclick = async () => {
-  const app = $("app").value.trim();
-  const h = $("appHint");
-  if (!app) return;
-  h.textContent = t("probing"); h.className = "hint";
-  $("probeBtn").disabled = true;
-  try {
-    const r = await invoke("probe_app", { app });
-    h.textContent = r.honored ? t("probeYes") : t("probeNo");
-    h.className = "hint " + (r.honored ? "good" : "bad");
-    if (r.was_running && !r.stopped) say(t("probeLeft"), "err");
-  } catch (e) { h.textContent = String(e); h.className = "hint bad"; }
-  $("probeBtn").disabled = false;
-};
 
 /* ---------------------------------------------------------------- Claude sessions
    The index files live inside a profile; the transcripts live in the real ~/.claude, OUTSIDE it.
@@ -1549,7 +1700,7 @@ $("sessBtn").onclick = async () => {
   if (!sessApps.length) { box.innerHTML = `<div class="note">${esc(t("sessNone"))}</div>`; return; }
   box.innerHTML = sessApps.map((a, i) => `<button class="pick" data-pick="${i}">
       <span class="tile" aria-hidden="true">${esc(initials(a.app))}</span>
-      <span class="pn"><b>${esc(a.app)}</b><span>${esc(a.evidence)}</span></span>
+      <span class="pn"><b>${esc(a.app)}</b><span>${esc(evText(a.evidence))}</span></span>
       <span class="go" aria-hidden="true">›</span></button>`).join("");
   box.querySelectorAll("[data-pick]").forEach(b => {
     b.onclick = () => openSessApp(sessApps[+b.dataset.pick]);
@@ -1560,7 +1711,7 @@ $("spClose").onclick = () => $("bdSessApps").classList.remove("open");
 function openSessApp(a) {
   sessApp = a;
   $("saTitle").textContent = a.app;
-  $("saSub").textContent = a.evidence;
+  $("saSub").textContent = evText(a.evidence);
   $("saStatus").textContent = ""; $("saStatus").className = "hint";
   // Conversation transfer exists for Claude only, and only through the CLI; session-check too.
   $("saClaude").hidden = !(hasCli && a.name.toLowerCase() === "claude");
@@ -1569,15 +1720,15 @@ function openSessApp(a) {
   $("bdSessApp").classList.add("open");
   // the size arrives after the sheet is up, like everywhere else in this window
   invoke("app_data_size", { app: a.name }).then(b => {
-    if (sessApp === a) $("saSub").textContent = `${a.evidence} · ${human(b)}`;
+    if (sessApp === a) $("saSub").textContent = `${evText(a.evidence)} · ${human(b)}`;
   }).catch(() => {});
 }
 $("saClose").onclick  = () => $("bdSessApp").classList.remove("open");
 $("saBack").onclick   = () => { $("bdSessApp").classList.remove("open"); $("sessBtn").onclick(); };
 $("saBackup").onclick  = () => sessApp && doBackup(sessApp, false, $("saStatus"));
+$("saFull").onclick    = () => sessApp && doBackup(sessApp, true, $("saStatus"));
 $("saRestore").onclick = () => sessApp && restoreFromFile($("saStatus"), sessApp.name);
 $("saSaved").onclick   = () => sessApp && showSaved(sessApp);
-$("saSites").onclick   = () => sessApp && showSites(sessApp, $("saStatus"));
 $("saClaude").onclick  = () => { $("bdSessApp").classList.remove("open"); openClaudeSessions(); };
 $("sDone").onclick = () => $("bdSessions").classList.remove("open");
 $("sFrom").onchange = () => { loadSessions(); loadFromAccounts(); };
@@ -1725,8 +1876,8 @@ $("trashEmpty").onclick = async () => {
   } catch (e) { trashStatus(String(e), "bad"); await loadTrash(); }
 };
 
-$("bRescan").onclick = loadApps;
-$("advBtn").onclick = () => { closeMenus(); $("bStatus").textContent = ""; $("bdTools").classList.add("open"); loadApps(); };
+$("bRescan").onclick = () => { appSizeCache.clear(); loadApps(); };
+$("advBtn").onclick = () => { closeMenus(); $("bStatus").textContent = ""; $("tFind").value = ""; $("bdTools").classList.add("open"); loadApps(); };
 $("tClose").onclick = () => $("bdTools").classList.remove("open");
 $("savedClose").onclick = () => $("bdSaved").classList.remove("open");
 

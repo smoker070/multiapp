@@ -1,5 +1,6 @@
 # build artifacts
 app/build/
+app/build.noindex/
 app/dist/
 
 # macOS
@@ -31,7 +32,8 @@ migrate-cache
 .claude/
 
 # Rust build output (gigabytes — never commit)
-rust/target/
+rust/target
+rust/target.noindex/
 **/*.rs.bk
 
 # GUI preview scratch (lives outside the repo, but never commit a copy)

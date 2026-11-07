@@ -106,6 +106,30 @@ fn profile_dir(app: &str, name: &str) -> Result<PathBuf, Error> {
     Ok(p)
 }
 
+/// Write a whole profile — its login, settings and history — into a zip at `out`.
+///
+/// The archive is an ordinary Multiapp backup whose paths point at the profile folder, so the
+/// existing restore brings it back: same app, same profile name, merged rather than replaced.
+/// Refuses a running profile, because a live browser profile copies half-written.
+pub fn export(app: &str, name: &str, out: &std::path::Path, now: &str) -> Result<crate::archive::Summary, Error> {
+    require_idle(app, name)?;
+    let dir = profile_dir(app, name)?;
+    if !dir.is_dir() {
+        return Err(Error::LaunchFailed(format!("no such profile: {app}/{name}")));
+    }
+    let s = crate::archive::create(&format!("{app}/{name}"), std::slice::from_ref(&dir), out, false, false, now)?;
+    // Archive paths are kept relative to the home folder. A profile root outside it (a custom
+    // MULTIAPP_HOME) archives nothing — say so instead of handing over an empty file.
+    if s.files == 0 {
+        let _ = std::fs::remove_file(out);
+        return Err(Error::LaunchFailed(format!(
+            "nothing to export: {} is empty or outside your home folder",
+            dir.display()
+        )));
+    }
+    Ok(s)
+}
+
 /// A profile must be idle before it is renamed, cloned onto, or removed. "unknown" counts as busy:
 /// processes existed that could not be inspected, and acting on a live profile corrupts it.
 fn require_idle(app: &str, name: &str) -> Result<(), Error> {
@@ -243,6 +267,37 @@ mod op_tests {
         create(app, name).unwrap();
         let d = paths::profile_data_dir(app, name).unwrap();
         std::fs::write(d.join("Cookies"), marker).unwrap();
+    }
+
+    /// Export, lose the profile, restore the file: the login comes back under the same name.
+    /// The root sits under the real home because archive paths are stored relative to it.
+    #[test]
+    fn an_exported_profile_restores_under_its_own_name() {
+        let _g = paths::env_guard();
+        let home = directories::BaseDirs::new().unwrap().home_dir().to_path_buf();
+        let root = home.join(format!(".ma-export-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::env::set_var("MULTIAPP_HOME", &root);
+        seed(APP, "travel", "travel login");
+        let zip = root.join("travel.zip");
+        let s = export(APP, "travel", &zip, "now").unwrap();
+        assert!(s.files >= 1);
+        std::fs::remove_dir_all(profile_dir(APP, "travel").unwrap()).unwrap();
+        crate::archive::restore(&zip, "t").unwrap();
+        let back = std::fs::read_to_string(paths::profile_data_dir(APP, "travel").unwrap().join("Cookies"));
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(back.unwrap(), "travel login");
+    }
+
+    #[test]
+    fn exporting_a_profile_outside_home_is_refused_not_empty() {
+        with_root(|| {
+            seed(APP, "elsewhere", "x");
+            let zip = std::env::temp_dir().join(format!("ma-empty-{}.zip", std::process::id()));
+            let r = export(APP, "elsewhere", &zip, "now");
+            assert!(r.is_err(), "an empty archive was written instead of an error");
+            assert!(!zip.exists());
+        })
     }
 
     #[test]

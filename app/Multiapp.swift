@@ -1,4 +1,4 @@
-// Multiapp — macOS menu-bar app (v0.3.0)
+// Multiapp — macOS menu-bar app
 // Thin GUI over the `multiapp` CLI engine (the CLI stays the source of truth).
 // Build: see build.sh in this folder. No Xcode required — plain swiftc + AppKit.
 import AppKit
@@ -6,14 +6,18 @@ import AppKit
 // ---------------------------------------------------------------- CLI bridge
 struct CLI {
     /// Resolve the engine: prefer the move-proof stub target, then the stub itself.
-    static let path: String = {
+    ///
+    /// Read on every call, not once at launch. The project folder moved while this app was
+    /// running, and a path frozen at start-up kept pointing at the old folder: every action
+    /// failed until the app was restarted, and New Profile reported it as "no apps".
+    static var path: String {
         let conf = NSHomeDirectory() + "/.config/multiapp/target"
         if let t = try? String(contentsOfFile: conf, encoding: .utf8),
            FileManager.default.isExecutableFile(atPath: t.trimmingCharacters(in: .whitespacesAndNewlines)) {
             return t.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return NSHomeDirectory() + "/.local/bin/multiapp"
-    }()
+    }
 
     @discardableResult
     static func run(_ args: [String], input: String? = nil) -> (out: String, err: String, code: Int32) {
@@ -65,9 +69,13 @@ struct CLI {
         return (list, msg.isEmpty ? "the CLI exited with code \(r.code)" : msg)
     }
 
-    static func apps() -> [App] {
-        // parse `multiapp apps` fixed-width table; keep launchable verdicts only
-        run(["apps"]).out.split(separator: "\n").dropFirst().compactMap { line in
+    static func apps() -> [App] { appsOrError().list }
+
+    /// The launchable apps — and, when there are none, what the CLI said. "No launchable apps"
+    /// was shown for a CLI that could not even start, which sent the user looking for apps.
+    static func appsOrError() -> (list: [App], error: String?) {
+        let r = run(["apps"])
+        let list: [App] = r.out.split(separator: "\n").dropFirst().compactMap { line in
             let s = String(line)
             guard s.count > 45 else { return nil }
             let key = String(s.prefix(20)).trimmingCharacters(in: .whitespaces)
@@ -78,6 +86,9 @@ struct CLI {
             guard ["supported", "untested"].contains(verdict) else { return nil }
             return App(key: key, display: display, verdict: verdict)
         }
+        guard list.isEmpty else { return (list, nil) }
+        let msg = (r.err.isEmpty ? r.out : r.err).trimmingCharacters(in: .whitespacesAndNewlines)
+        return (list, r.code != 0 ? (msg.isEmpty ? "the CLI exited with code \(r.code)" : msg) : nil)
     }
 
     struct BackupApp { let key: String; let verdict: String; let evidence: String }
@@ -317,19 +328,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             stop.isEnabled = p.running
             sub.addItem(stop)
             sub.addItem(.separator())
-            for (title, sel) in [("Rename Profile…", #selector(renameProfile(_:))),
-                                 ("Clone Profile…", #selector(cloneProfile(_:))),
-                                 ("Export Profile…", #selector(exportProfile(_:)))] {
+            // Claude's export carries Claude Code chats only; every other app's carries the whole
+            // profile. The label says which, because the two files are not interchangeable.
+            let exportTitle = p.app == "claude" ? "Export Chats Only…" : "Export Profile (Login + Data)…"
+            for (title, sel) in [("Rename…", #selector(renameProfile(_:))),
+                                 ("Clone…", #selector(cloneProfile(_:))),
+                                 (exportTitle, #selector(exportProfile(_:)))] {
                 let i = make(title, sel, rep: p)
                 i.isEnabled = !p.running       // CLI refuses these on running profiles anyway
                 sub.addItem(i)
             }
             if p.app == "claude" {
                 sub.addItem(.separator())
-                sub.addItem(make("Transfer Sessions…", #selector(transferSessions(_:)), rep: p))
+                sub.addItem(make("Move Chats…", #selector(transferSessions(_:)), rep: p))
             }
             sub.addItem(.separator())
-            let del = make("Delete Profile…", #selector(deleteProfile(_:)), rep: p)
+            let del = make("Delete…", #selector(deleteProfile(_:)), rep: p)
             del.isEnabled = !p.running
             sub.addItem(del)
             item.submenu = sub
@@ -356,8 +370,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             appSub.addItem(what)
             appSub.addItem(NSMenuItem.separator())
             appSub.addItem(make("What's Saved?…", #selector(sessionCheckApp(_:)), rep: b.key))
-            appSub.addItem(make("Back Up…", #selector(backupApp(_:)), rep: b.key))
-            appSub.addItem(make("Restore…", #selector(restoreApp(_:)), rep: b.key))
+            appSub.addItem(make("Back Up (Login + Data)…", #selector(backupApp(_:)), rep: b.key))
+            appSub.addItem(make("Restore Backup…", #selector(restoreApp(_:)), rep: b.key))
             appItem.submenu = appSub
             backupSub.addItem(appItem)
         }
@@ -368,11 +382,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         backupItem.submenu = backupSub
         menu.addItem(backupItem)
 
-        menu.addItem(make("Export App Data…", #selector(exportAppData(_:))))
-        menu.addItem(make("Import App Data…", #selector(importAppData(_:))))
-        menu.addItem(make("Rescan Installed Apps", #selector(rescan(_:))))
+        menu.addItem(make("Export App (Login + Data)…", #selector(exportAppData(_:))))
+        menu.addItem(make("Import App…", #selector(importAppData(_:))))
+        menu.addItem(make("Rescan Apps", #selector(rescan(_:))))
         menu.addItem(.separator())
-        let v = NSMenuItem(title: "Multiapp v0.3.0", action: nil, keyEquivalent: "")
+        let v = NSMenuItem(title: "Multiapp v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")", action: nil, keyEquivalent: "")
         v.isEnabled = false
         if let ic = NSApp.applicationIconImage.copy() as? NSImage {
             ic.size = NSSize(width: 16, height: 16)
@@ -382,6 +396,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(make("Quit Multiapp", #selector(NSApplication.terminate(_:)), key: "q"))
     }
 
+    // No subtitles: a second line under every item made each menu twice as wide, so submenus ran
+    // off the screen edge and flipped left over their parent. The title itself says what it carries.
     func make(_ title: String, _ sel: Selector, rep: Any? = nil, key: String = "") -> NSMenuItem {
         let i = NSMenuItem(title: title, action: sel, keyEquivalent: key)
         i.target = (sel == #selector(NSApplication.terminate(_:))) ? NSApp : self
@@ -444,7 +460,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let p = s.representedObject as? CLI.Profile else { return }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "multiapp-\(p.app)-\(p.name).tar.gz"
-        panel.title = "Export \(p.app)/\(p.name)"
+        panel.title = p.app == "claude" ? "Export Claude Code chats from \(p.name)" : "Export \(p.app)/\(p.name) — login, settings and history"
         panel.prompt = "Export"
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -472,14 +488,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func importProfile(_ s: NSMenuItem) {
         let panel = NSOpenPanel()
-        panel.title = "Import Profile Archive"
+        panel.title = "Import Profile"
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        let apps = CLI.apps()
-        guard !apps.isEmpty else { return alert("No apps", "Run a scan first.") }
+        let (apps, failure) = CLI.appsOrError()
+        if let failure = failure { return alert("Couldn't list apps", failure) }
+        guard !apps.isEmpty else { return alert("No apps", "Run Rescan Installed Apps first.") }
         let d = CenteredDialog(title: "Import Into",
                                message: "Choose the app and a NEW profile name for the imported archive.")
         let popup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -541,7 +558,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // any ↔ any: main + every claude profile
         let targets = ["main"] + CLI.profiles().filter { $0.app == "claude" }.map { $0.name }
 
-        let d = CenteredDialog(title: "Transfer Sessions",
+        let d = CenteredDialog(title: "Move Chats",
                                message: "Copy Claude Code sessions between any profiles.\nRestart the destination profile afterwards to see them.",
                                width: 540)
 
@@ -601,8 +618,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let apps = CLI.installedApps()
         guard !apps.isEmpty else { return alert("No apps found", "Couldn't list the applications on this Mac.") }
 
-        let d = CenteredDialog(title: "Export App Data",
-                               message: "Pick an app. Its locally saved sessions and settings are exported to a folder you choose (caches excluded).",
+        let d = CenteredDialog(title: "Export App (Login + Data)",
+                               message: "Pick an app. Everything it saved on this Mac — sign-in, chats, settings — goes into one file in a folder you choose. Caches are left out.",
                                width: 380)
         let popup = NSPopUpButton(frame: .zero, pullsDown: false)
         for a in apps { popup.addItem(withTitle: a.name); popup.lastItem?.representedObject = a.name }
@@ -652,7 +669,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Import an app-export archive back. The archive names its own app, so there's nothing to pick.
     @objc func importAppData(_ s: NSMenuItem) {
         let panel = NSOpenPanel()
-        panel.title = "Import App Data"
+        panel.title = "Import App"
         panel.message = "Choose a Multiapp export archive (.tar.gz)"
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
@@ -660,7 +677,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        let d = CenteredDialog(title: "Import App Data",
+        let d = CenteredDialog(title: "Import App",
                                message: "Write this archive's data back.\nNothing is deleted — files it doesn't contain (like caches) are kept, and anything replaced is staged to Multiapp Trash.")
         d.addButton("Import", code: 1, key: "\r")
         d.addButton("Cancel", code: 2, key: "\u{1b}")
@@ -795,8 +812,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc func newProfile(_ s: NSMenuItem) {
-        let apps = CLI.apps()
-        guard !apps.isEmpty else { return alert("No launchable apps", "Run a scan first.") }
+        let (apps, failure) = CLI.appsOrError()
+        if let failure = failure { return alert("Couldn't list apps", failure) }
+        guard !apps.isEmpty else { return alert("No launchable apps", "Run Rescan Installed Apps first.") }
 
         let d = CenteredDialog(title: "New Profile",
                                message: "Choose the app and name the profile\n(letters, digits, hyphens).")

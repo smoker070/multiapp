@@ -24,7 +24,7 @@ struct AppDto {
     path: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_profiles() -> Result<Vec<ProfileDto>, String> {
     let mut v: Vec<ProfileDto> = profile::list()
         .map_err(|e| e.to_string())?
@@ -35,26 +35,26 @@ fn list_profiles() -> Result<Vec<ProfileDto>, String> {
     Ok(v)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn create_profile(app: String, name: String) -> Result<String, String> {
     profile::create(&app, &name)
         .map(|p| p.display().to_string())
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn launch_profile(app: String, name: String) -> Result<(), String> {
     profile::launch_profile(&app, &app, &name, &[]).map_err(|e| e.to_string())
 }
 
 /// Ask the app to quit. Never force-kills — a refusal is reported to the UI as a message, not as a
 /// silent failure, and the profile stays exactly as it was.
-#[tauri::command]
+#[tauri::command(async)]
 fn stop_profile(app: String, name: String) -> Result<bool, String> {
     profile::stop(&app, &name, 20).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn profiles_root() -> Result<String, String> {
     paths::profiles_root().map(|p| p.display().to_string()).map_err(|e| e.to_string())
 }
@@ -62,7 +62,7 @@ fn profiles_root() -> Result<String, String> {
 /// Apps on this machine that are plausible profile targets, so the New Profile dialog can offer a
 /// list instead of asking someone to type an exact name. Deliberately permissive: `probe` and the
 /// launch itself are what actually decide whether an app honours the flag.
-#[tauri::command]
+#[tauri::command(async)]
 fn detect_apps() -> Vec<AppDto> {
     let mut out: Vec<AppDto> = Vec::new();
     let mut push = |name: String, path: PathBuf| {
@@ -130,7 +130,7 @@ fn detect_apps() -> Vec<AppDto> {
 
 /// Does this app reference resolve to something launchable? Lets the dialog say so before a profile
 /// is created, rather than failing at first launch.
-#[tauri::command]
+#[tauri::command(async)]
 fn app_exists(app: String) -> bool {
     launch::resolve_app(&app).is_ok()
 }
@@ -144,7 +144,7 @@ fn start_menu_lnk() -> Option<PathBuf> {
 }
 
 /// Is this build already in the Start Menu?
-#[tauri::command]
+#[tauri::command(async)]
 fn in_start_menu() -> bool {
     #[cfg(windows)]
     {
@@ -165,7 +165,7 @@ fn in_start_menu() -> bool {
 ///
 /// The shortcut is written through WScript.Shell rather than by hand: a .lnk is a COM-serialised
 /// binary format, and driving IShellLink from here would mean a pile of unsafe FFI for one file.
-#[tauri::command]
+#[tauri::command(async)]
 fn add_to_start_menu() -> Result<String, String> {
     #[cfg(windows)]
     {
@@ -201,31 +201,31 @@ fn add_to_start_menu() -> Result<String, String> {
 }
 
 
-#[tauri::command]
+#[tauri::command(async)]
 fn clone_profile(app: String, from: String, to: String) -> Result<(), String> {
     profile::clone_profile(&app, &from, &to).map(|_| ()).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn rename_profile(app: String, old: String, new: String) -> Result<(), String> {
     profile::rename(&app, &old, &new).map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// Remove a profile. It is MOVED to Multiapp's Trash, never deleted, and the caller is told where it
 /// went so the UI can say so — a profile holds real logins and a misclick has to be recoverable.
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_profile(app: String, name: String, stamp: String) -> Result<String, String> {
     profile::delete_to_trash(&app, &name, &stamp)
         .map(|p| p.display().to_string())
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn profile_size(app: String, name: String) -> Result<u64, String> {
     profile::size_bytes(&app, &name).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn reveal_profile(app: String, name: String) -> Result<(), String> {
     profile::reveal(&app, &name).map_err(|e| e.to_string())
 }
@@ -247,7 +247,7 @@ fn find_bash_cli() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn advanced_available() -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -312,7 +312,7 @@ fn advanced(args: &[&str]) -> Result<String, String> {
 }
 
 /// Run one of the macOS-only commands and hand back its output verbatim.
-#[tauri::command]
+#[tauri::command(async)]
 fn run_advanced(args: Vec<String>) -> Result<String, String> {
     advanced(&args.iter().map(String::as_str).collect::<Vec<_>>())
 }
@@ -351,7 +351,7 @@ struct AccountDto {
 
 /// The account folders a profile keeps sessions in. Claude shows only the signed-in one, so after
 /// switching accounts the old sessions are still on disk — in a folder the app no longer opens.
-#[tauri::command]
+#[tauri::command(async)]
 fn claude_accounts(profile: String) -> Result<Vec<AccountDto>, String> {
     let out = advanced(&["accounts", "claude", &profile, "--raw"])?;
     Ok(out
@@ -374,7 +374,7 @@ fn claude_accounts(profile: String) -> Result<Vec<AccountDto>, String> {
 /// Sessions are a special case: the index files live inside the profile, but the transcripts live
 /// in the real `~/.claude`, outside it. That is why copying a session is a CLI command with its own
 /// id-minting logic rather than a file copy, and why this screen exists at all.
-#[tauri::command]
+#[tauri::command(async)]
 fn claude_sessions(profile: String) -> Result<Vec<SessionDto>, String> {
     let out = advanced(&["sessions", "claude", &profile, "--raw"])?;
     Ok(out
@@ -396,7 +396,7 @@ fn claude_sessions(profile: String) -> Result<Vec<SessionDto>, String> {
 /// Copy sessions as INDEPENDENT copies (new ids, duplicated transcript). The originals are untouched.
 /// `to_account` names the destination account folder; it is what makes a copy within one install
 /// meaningful, and the CLI refuses a same-install copy without it.
-#[tauri::command]
+#[tauri::command(async)]
 fn transfer_sessions(
     from: String,
     to: String,
@@ -415,18 +415,18 @@ fn transfer_sessions(
 }
 
 /// Write chosen sessions to an archive that can be carried to another machine.
-#[tauri::command]
+#[tauri::command(async)]
 fn export_sessions(profile: String, out: String, picks: String) -> Result<String, String> {
     advanced(&["export", "claude", &profile, &out, &picks])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn import_sessions(profile: String, file: String) -> Result<String, String> {
     advanced(&["import", "claude", &profile, &file])
 }
 
 /// What session data an app holds and whether it would survive a move to another Mac.
-#[tauri::command]
+#[tauri::command(async)]
 fn session_check(app: String) -> Result<String, String> {
     advanced(&["session-check", &app])
 }
@@ -444,7 +444,7 @@ struct AppDataDto {
 /// Carries no sizes. It used to, and measuring them is what made the Back Up window sit on a
 /// spinner: every app's tree was walked in full before the first row could be drawn, and Claude's
 /// is gigabytes. The window now draws immediately and asks `app_data_size` per app afterwards.
-#[tauri::command]
+#[tauri::command(async)]
 fn list_app_data() -> Result<Vec<AppDataDto>, String> {
     Ok(appdata::installed()
         .map_err(|e| e.to_string())?
@@ -472,7 +472,7 @@ struct SessionAppDto {
 /// includes the folders uninstalled apps leave behind. That is right for backups (the data is
 /// still worth saving) and wrong here, where offering a session for an app that is not on the
 /// machine is just noise.
-#[tauri::command]
+#[tauri::command(async)]
 fn session_apps() -> Result<Vec<SessionAppDto>, String> {
     // Only the macOS branch below adds to this, so elsewhere the `mut` is unused — and this
     // file is built on Windows, where I cannot see the warning.
@@ -504,7 +504,7 @@ fn session_apps() -> Result<Vec<SessionAppDto>, String> {
 }
 
 /// Bytes one app holds. Slow on purpose — called once per visible row, never in a loop up front.
-#[tauri::command]
+#[tauri::command(async)]
 fn app_data_size(app: String) -> Result<u64, String> {
     appdata::size_of(&app).map_err(|e| e.to_string())
 }
@@ -519,7 +519,7 @@ fn now_stamp() -> String {
 }
 
 /// Archive an app's data, or just the files that carry its login.
-#[tauri::command]
+#[tauri::command(async)]
 fn backup_app(app: String, out: String, sessions_only: bool) -> Result<String, String> {
     let dirs = appdata::dirs_for(&app).map_err(|e| e.to_string())?;
     if dirs.is_empty() {
@@ -530,15 +530,22 @@ fn backup_app(app: String, out: String, sessions_only: bool) -> Result<String, S
     Ok(format!("{} file(s), {} — {}", s.files, human(s.bytes), s.path.display()))
 }
 
+/// A whole profile into one file: login, settings and history. Restore brings it back.
+#[tauri::command(async)]
+fn export_profile(app: String, name: String, out: String) -> Result<String, String> {
+    let s = profile::export(&app, &name, std::path::Path::new(&out), &now_stamp()).map_err(|e| e.to_string())?;
+    Ok(format!("{} file(s), {} — {}", s.files, human(s.bytes), s.path.display()))
+}
+
 /// What is inside an archive, before anything is written.
-#[tauri::command]
+#[tauri::command(async)]
 fn archive_info(path: String) -> Result<serde_json::Value, String> {
     let m = archive::read_manifest(std::path::Path::new(&path)).map_err(|e| e.to_string())?;
     serde_json::to_value(m).map_err(|e| e.to_string())
 }
 
 /// Put an archive back. Merges into what is there; anything overwritten is staged to Trash first.
-#[tauri::command]
+#[tauri::command(async)]
 fn restore_archive(path: String) -> Result<String, String> {
     let s = archive::restore(std::path::Path::new(&path), &now_stamp()).map_err(|e| e.to_string())?;
     let mut msg = format!("{} file(s), {} restored", s.files, human(s.bytes));
@@ -560,30 +567,15 @@ fn human(b: u64) -> String {
 }
 
 
-/// Which sites an app's cookies belong to. Host names only — cookie values are never read.
-#[tauri::command]
-fn cookie_report(app: String) -> Result<serde_json::Value, String> {
-    let c = appdata::cookie_report(&app).map_err(|e| e.to_string())?;
-    serde_json::to_value(c).map_err(|e| e.to_string())
-}
-
-/// Launch an app into a throwaway directory to find out whether it honours the flag at all.
-/// Some apps override their data directory in their own code and simply ignore it.
-#[tauri::command]
-fn probe_app(app: String) -> Result<serde_json::Value, String> {
-    let p = launch::probe(&app, 20).map_err(|e| e.to_string())?;
-    serde_json::to_value(p).map_err(|e| e.to_string())
-}
-
 /// What is in Multiapp's Trash: deleted profiles, moved-aside sessions, files a restore replaced.
-#[tauri::command]
+#[tauri::command(async)]
 fn trash_list() -> Result<Vec<trash::TrashItem>, String> {
     trash::list().map_err(|e| e.to_string())
 }
 
 /// How many entries are in Trash — cheap, for the header badge. `trash_list` walks every entry to
 /// size it, which on gigabytes of deleted profiles is not something to do on every start.
-#[tauri::command]
+#[tauri::command(async)]
 fn trash_count() -> usize {
     paths::trash_root()
         .ok()
@@ -593,18 +585,18 @@ fn trash_count() -> usize {
 }
 
 /// Put a deleted profile back. Refuses when a profile of that name exists again.
-#[tauri::command]
+#[tauri::command(async)]
 fn trash_restore(id: String) -> Result<String, String> {
     trash::restore(&id).map(|p| p.display().to_string()).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn trash_reveal(id: String) -> Result<(), String> {
     trash::reveal(&id).map_err(|e| e.to_string())
 }
 
 /// The only permanent deletion in the app, and only from an explicit, confirmed click.
-#[tauri::command]
+#[tauri::command(async)]
 fn trash_empty() -> Result<String, String> {
     let (n, bytes) = trash::empty().map_err(|e| e.to_string())?;
     Ok(format!("{n} item(s), {}", human(bytes)))
@@ -644,11 +636,10 @@ fn main() {
             list_app_data,
             app_data_size,
             session_apps,
+            export_profile,
             backup_app,
             archive_info,
             restore_archive,
-            cookie_report,
-            probe_app,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the Multiapp window");
@@ -670,5 +661,22 @@ mod ui_tests {
             .map(|(i, _)| i + 1)
             .collect();
         assert!(hits.is_empty(), "inline style attribute(s) at ui/index.html line(s) {hits:?}");
+    }
+
+    /// Tauri runs a plain `#[tauri::command]` on the window's main thread. Every command here
+    /// touches the disk or spawns a process — measuring Claude's profile walks 15 GB — so a
+    /// plain one freezes the whole window until it returns. That was the "Settings opens slowly"
+    /// report: the click waited behind a size measurement. `(async)` moves it to a worker.
+    #[test]
+    fn no_command_runs_on_the_main_thread() {
+        let src = include_str!("main.rs");
+        let plain = concat!("#[tauri::", "command]");
+        let hits: Vec<usize> = src
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.trim() == plain)
+            .map(|(i, _)| i + 1)
+            .collect();
+        assert!(hits.is_empty(), "main-thread command(s) at src/main.rs line(s) {hits:?}");
     }
 }

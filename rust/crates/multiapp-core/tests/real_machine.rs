@@ -14,23 +14,6 @@ fn what_this_machine_holds() {
     println!("\n{} app(s) with a saved session", apps.len());
 }
 
-#[test]
-fn cookie_hosts_for_the_apps_that_were_cross_checked() {
-    for app in ["Claude", "Notion", "Notion Calendar", "hdrezka-client", "Firefox"] {
-        match appdata::cookie_report(app) {
-            Ok(c) if c.total > 0 => {
-                println!("\n{app}: {} cookies ({} encrypted, {} plaintext) across {} host(s)",
-                         c.total, c.encrypted, c.plaintext, c.hosts.len());
-                for (h, n) in c.hosts.iter().take(5) {
-                    println!("   {n:>4}  {h}");
-                }
-            }
-            Ok(_) => println!("\n{app}: no cookies"),
-            Err(e) => println!("\n{app}: {e}"),
-        }
-    }
-}
-
 /// Where the Back Up window's wait actually goes, per app. Run it when that window feels slow —
 /// guessing which half is expensive is how the 15 GB byte-sum survived a release.
 #[test]
@@ -108,4 +91,26 @@ fn which_session_folders_still_have_their_app() {
             None => println!("  skip  {:<20} (no installed app)", a.name),
         }
     }
+}
+
+/// What the main window pays: the list (with its process sweep) on every poll, and each profile's
+/// size once. Run it when the main window feels slow.
+#[test]
+fn how_long_the_main_window_costs() {
+    use multiapp_core::{appdata, profile};
+    use std::time::Instant;
+    let t = Instant::now();
+    let list = profile::list().expect("list");
+    println!("\nprofile::list(): {} ms for {} profile(s)", t.elapsed().as_millis(), list.len());
+    for p in &list {
+        let t = Instant::now();
+        let b = profile::size_bytes(&p.app, &p.name).unwrap_or(0);
+        println!("  size {}/{}: {:.1} MB in {} ms", p.app, p.name, b as f64 / 1_048_576.0, t.elapsed().as_millis());
+    }
+    let t = Instant::now();
+    let n = appdata::installed().map(|v| v.len()).unwrap_or(0);
+    println!("appdata::installed(): {} ms for {n} app(s)", t.elapsed().as_millis());
+    let t = Instant::now();
+    let c = appdata::size_of("Claude").unwrap_or(0);
+    println!("size_of(Claude): {:.1} GB in {} ms", c as f64 / 1_073_741_824.0, t.elapsed().as_millis());
 }

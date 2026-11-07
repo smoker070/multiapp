@@ -186,13 +186,11 @@ pub fn session_files(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// One cookie store, read properly.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default)]
 pub struct CookieStore {
     pub total: usize,
     pub encrypted: usize,
     pub plaintext: usize,
-    /// Host to cookie count, most cookies first.
-    pub hosts: Vec<(String, usize)>,
 }
 
 /// Read a Chromium or Gecko cookie store.
@@ -206,7 +204,7 @@ pub struct CookieStore {
 /// SQLite's substr() on a BLOB returns a BLOB, which never compares equal to a text literal, so
 /// doing it in SQL silently matches nothing.
 ///
-/// Host names ONLY. Cookie values are never read: they are live credentials.
+/// Counts only. Cookie values are never read: they are live credentials.
 pub fn read_cookies(path: &Path) -> Option<CookieStore> {
     let tmp = std::env::temp_dir().join(format!("ma-ck-{}-{}.sqlite", std::process::id(), rand_suffix()));
     std::fs::copy(path, &tmp).ok()?;
@@ -218,50 +216,33 @@ pub fn read_cookies(path: &Path) -> Option<CookieStore> {
         .ok()?;
         let mut st = CookieStore::default();
         // Chromium first, then Gecko's different table and column names
-        let chromium = db.prepare("SELECT host_key, value, encrypted_value FROM cookies").ok();
+        let chromium = db.prepare("SELECT value, encrypted_value FROM cookies").ok();
         if let Some(mut q) = chromium {
             let rows = q
                 .query_map([], |r| {
                     Ok((
                         r.get::<_, String>(0).unwrap_or_default(),
-                        r.get::<_, String>(1).unwrap_or_default(),
-                        r.get::<_, Vec<u8>>(2).unwrap_or_default(),
+                        r.get::<_, Vec<u8>>(1).unwrap_or_default(),
                     ))
                 })
                 .ok()?;
-            let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-            for row in rows.flatten() {
-                let (host, value, enc) = row;
+            for (value, enc) in rows.flatten() {
                 st.total += 1;
                 if !enc.is_empty() {
                     st.encrypted += 1;
                 } else if !value.is_empty() {
                     st.plaintext += 1;
                 }
-                *counts.entry(host).or_default() += 1;
             }
-            st.hosts = rank(counts);
         } else {
-            let mut q = db.prepare("SELECT host FROM moz_cookies").ok()?;
-            let rows = q.query_map([], |r| r.get::<_, String>(0)).ok()?;
-            let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-            for h in rows.flatten() {
-                st.total += 1;
-                st.plaintext += 1; // Gecko keeps values in the clear
-                *counts.entry(h).or_default() += 1;
-            }
-            st.hosts = rank(counts);
+            let n: i64 = db.query_row("SELECT count(*) FROM moz_cookies", [], |r| r.get(0)).ok()?;
+            st.total = n as usize;
+            st.plaintext = n as usize; // Gecko keeps values in the clear
         }
         Some(st)
     })();
     let _ = std::fs::remove_file(&tmp);
     out
-}
-
-fn rank(counts: std::collections::HashMap<String, usize>) -> Vec<(String, usize)> {
-    let mut v: Vec<(String, usize)> = counts.into_iter().collect();
-    v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    v
 }
 
 fn rand_suffix() -> u64 {
@@ -277,30 +258,6 @@ fn cookie_kind(path: &Path) -> Evidence {
         Some(c) if c.plaintext > 0 => Evidence::CookiesPlain,
         _ => Evidence::None,
     }
-}
-
-/// Which sites an app's cookies belong to, and how many of each.
-///
-/// This is the part no heuristic can settle: twelve mirror domains plus ad trackers is website
-/// state, `.identity.notion.com` is an account. Showing the hosts lets a person decide instead of
-/// the tool guessing.
-pub fn cookie_report(app: &str) -> Result<CookieStore, Error> {
-    let mut best = CookieStore::default();
-    for d in dirs_for(app)? {
-        for f in session_files(&d) {
-            let Some(n) = f.file_name().and_then(|s| s.to_str()) else { continue };
-            if n != "Cookies" && n != "cookies.sqlite" {
-                continue;
-            }
-            if let Some(c) = read_cookies(&f) {
-                // an app can own several stores; the one that actually holds the session wins
-                if c.total > best.total {
-                    best = c;
-                }
-            }
-        }
-    }
-    Ok(best)
 }
 
 pub fn evidence_for(app: &str) -> Result<Evidence, Error> {
