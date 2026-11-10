@@ -40,15 +40,37 @@ fn home() -> Result<PathBuf, Error> {
     directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf()).ok_or(Error::NoHome)
 }
 
-/// Write `dirs` into a zip at `out`.
-///
-/// `sessions_only` narrows it to the files that carry the login — kilobytes rather than gigabytes,
-/// which is what makes "save my login before reinstalling" practical at all.
+/// What a backup takes from an app's data folders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// Only the files that keep someone signed in (cookies, local/session storage, tokens).
+    /// Kilobytes rather than gigabytes: "save my login before reinstalling" is practical with it.
+    Login,
+    /// Everything EXCEPT those files: chats, history, settings. Safe to back up often and to hand
+    /// to another machine, because it carries no credential.
+    Sessions,
+    /// Both of the above. Caches are still left out.
+    Everything,
+}
+
+impl Scope {
+    /// The manifest `kind`. "session" is the historical name for a login-only archive and stays,
+    /// so archives written by older versions keep reading the same.
+    pub fn kind(self) -> &'static str {
+        match self {
+            Scope::Login => "session",
+            Scope::Sessions => "data",
+            Scope::Everything => "appdata",
+        }
+    }
+}
+
+/// Write `dirs` into a zip at `out`, taking what `scope` asks for.
 pub fn create(
     app: &str,
     dirs: &[PathBuf],
     out: &Path,
-    sessions_only: bool,
+    scope: Scope,
     include_cache: bool,
     now: &str,
 ) -> Result<Summary, Error> {
@@ -58,18 +80,17 @@ pub fn create(
     let opts: zip::write::FileOptions<'_, ()> =
         zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
-    let mut files = 0usize;
-    let mut bytes = 0u64;
+    let mut count = (0usize, 0u64);
     let mut rels: Vec<String> = Vec::new();
 
     for dir in dirs {
-        let wanted: Vec<PathBuf> = if sessions_only {
-            appdata::session_files(dir)
-        } else {
-            vec![dir.clone()]
+        let (wanted, skip): (Vec<PathBuf>, Vec<PathBuf>) = match scope {
+            Scope::Login => (appdata::session_files(dir), Vec::new()),
+            Scope::Sessions => (vec![dir.clone()], appdata::session_files(dir)),
+            Scope::Everything => (vec![dir.clone()], Vec::new()),
         };
         for w in wanted {
-            add_path(&mut zip, &opts, &home, &w, include_cache, &mut files, &mut bytes)?;
+            add_path(&mut zip, &opts, &home, &w, include_cache, &skip, &mut count)?;
             if let Ok(r) = w.strip_prefix(&home) {
                 rels.push(r.to_string_lossy().replace('\\', "/"));
             }
@@ -77,7 +98,7 @@ pub fn create(
     }
 
     let manifest = Manifest {
-        kind: if sessions_only { "session".into() } else { "appdata".into() },
+        kind: scope.kind().into(),
         app: app.to_string(),
         paths: rels,
         excluded_cache: !include_cache,
@@ -87,7 +108,7 @@ pub fn create(
     zip.start_file(MANIFEST, opts)?;
     zip.write_all(serde_json::to_string_pretty(&manifest).unwrap_or_default().as_bytes())?;
     zip.finish()?;
-    Ok(Summary { files, bytes, path: out.to_path_buf(), staged: None })
+    Ok(Summary { files: count.0, bytes: count.1, path: out.to_path_buf(), staged: None })
 }
 
 fn add_path<W: Write + Seek>(
@@ -96,9 +117,12 @@ fn add_path<W: Write + Seek>(
     home: &Path,
     p: &Path,
     include_cache: bool,
-    files: &mut usize,
-    bytes: &mut u64,
+    skip: &[PathBuf],
+    count: &mut (usize, u64), // files, bytes
 ) -> Result<(), Error> {
+    if skip.iter().any(|s| s == p) {
+        return Ok(()); // a login file or folder, left out of a Sessions backup
+    }
     let Ok(rel) = p.strip_prefix(home) else { return Ok(()) };
     let name = rel.to_string_lossy().replace('\\', "/");
     let meta = match std::fs::symlink_metadata(p) {
@@ -114,8 +138,8 @@ fn add_path<W: Write + Seek>(
         zip.start_file(name, *opts)?;
         let mut src = std::fs::File::open(p)?;
         let n = std::io::copy(&mut src, zip)?;
-        *files += 1;
-        *bytes += n;
+        count.0 += 1;
+        count.1 += n;
         return Ok(());
     }
     if meta.is_dir() {
@@ -124,7 +148,7 @@ fn add_path<W: Write + Seek>(
             return Ok(());
         }
         for e in std::fs::read_dir(p)?.flatten() {
-            add_path(zip, opts, home, &e.path(), include_cache, files, bytes)?;
+            add_path(zip, opts, home, &e.path(), include_cache, skip, count)?;
         }
     }
     Ok(())
@@ -241,7 +265,7 @@ mod tests {
             write(&dir.join("Cookies"), "session-value");
             write(&dir.join("sub/Local State"), "state");
             let zipf = home.join("out.zip");
-            let s = create("AppX", std::slice::from_ref(&dir), &zipf, false, false, "now").unwrap();
+            let s = create("AppX", std::slice::from_ref(&dir), &zipf, Scope::Everything, false, "now").unwrap();
             assert_eq!(s.files, 2);
 
             std::fs::remove_dir_all(&dir).unwrap();
@@ -262,7 +286,7 @@ mod tests {
             write(&dir.join("Cookies"), "v1");
             write(&dir.join("Cache/blob"), "big cache file");
             let zipf = home.join("y.zip");
-            let s = create("AppY", std::slice::from_ref(&dir), &zipf, false, false, "now").unwrap();
+            let s = create("AppY", std::slice::from_ref(&dir), &zipf, Scope::Everything, false, "now").unwrap();
             assert_eq!(s.files, 1, "the cache must be excluded from the archive");
 
             write(&dir.join("Cookies"), "v2-newer");
@@ -281,7 +305,7 @@ mod tests {
             let dir = home.join("AppZ");
             write(&dir.join("Cookies"), "original");
             let zipf = home.join("z.zip");
-            create("AppZ", std::slice::from_ref(&dir), &zipf, false, false, "now").unwrap();
+            create("AppZ", std::slice::from_ref(&dir), &zipf, Scope::Everything, false, "now").unwrap();
             write(&dir.join("Cookies"), "replaced-by-user");
             let r = restore(&zipf, "t").unwrap();
             let staged = r.staged.expect("overwriting must stage the old file");
@@ -324,9 +348,34 @@ mod tests {
             write(&dir.join("History"), "x".repeat(5000).as_str());
             write(&dir.join("Cache/huge"), "y".repeat(9000).as_str());
             let zipf = home.join("s.zip");
-            let s = create("AppS", &[dir], &zipf, true, false, "now").unwrap();
+            let s = create("AppS", &[dir], &zipf, Scope::Login, false, "now").unwrap();
             // Cookies + the leveldb file; History and Cache are neither session nor wanted
             assert_eq!(s.files, 2, "session backup must not sweep the whole directory");
+        })
+    }
+
+    /// Sessions = the app's data WITHOUT the login: chats and history in, cookies and storage out,
+    /// cache out. Restoring it must not touch the login already on the machine.
+    #[test]
+    fn sessions_scope_keeps_the_data_and_leaves_the_login_out() {
+        with_home(|home| {
+            let dir = home.join("AppD");
+            write(&dir.join("Cookies"), "login");
+            write(&dir.join("Local Storage/leveldb/000.ldb"), "login too");
+            write(&dir.join("History"), "history");
+            write(&dir.join("chats/one.json"), "a chat");
+            write(&dir.join("Cache/huge"), "cache");
+            let zipf = home.join("d.zip");
+            let s = create("AppD", std::slice::from_ref(&dir), &zipf, Scope::Sessions, false, "now").unwrap();
+            assert_eq!(s.files, 2, "History and the chat only");
+            assert_eq!(read_manifest(&zipf).unwrap().kind, "data");
+
+            write(&dir.join("Cookies"), "a newer login");
+            std::fs::remove_file(dir.join("chats/one.json")).unwrap();
+            restore(&zipf, "t").unwrap();
+            assert_eq!(std::fs::read_to_string(dir.join("chats/one.json")).unwrap(), "a chat");
+            assert_eq!(std::fs::read_to_string(dir.join("Cookies")).unwrap(), "a newer login",
+                "a sessions restore must leave the current login alone");
         })
     }
 }

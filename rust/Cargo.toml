@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/multiapp-core", "crates/multiapp-cli", "crates/multiapp-gui"]
 
 [workspace.package]
-version = "0.3.3"
+version = "0.3.4"
 edition = "2021"
 rust-version = "1.77"
 license = "MIT"

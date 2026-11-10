@@ -93,23 +93,6 @@ struct CLI {
 
     struct BackupApp { let key: String; let verdict: String; let evidence: String }
 
-    /// Human wording for a `session_evidence` value. Deliberately states only what was FOUND — the
-    /// tool cannot tell an account from ordinary website state without reading cookie values, and it
-    /// does not read them. Notion Calendar settles the point: 43 plaintext cookies, .identity.notion.so
-    /// among them, so "plaintext" never means "not a login".
-    static func sessionLabel(_ e: String) -> String {
-        switch e {
-        case "account-file":  return "account file"
-        case "tdata":         return "account store"
-        case "cookies-enc":   return "cookies (encrypted)"
-        case "cookies-plain": return "cookies (plaintext)"
-        case "webstorage":    return "local web data"
-        case "keychain":      return "login lives in the Keychain"
-        case "enc-store":     return "no session files found"
-        default:              return e
-        }
-    }
-
     /// Apps whose real data can be backed up on this machine (from `migrate-list --raw`).
     static func backupApps() -> [BackupApp] {
         run(["migrate-list", "--raw"]).out.split(separator: "\n").compactMap {
@@ -363,14 +346,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let appItem = NSMenuItem(title: b.verdict == "experimental" ? "\(disp)  (experimental)" : disp,
                                      action: nil, keyEquivalent: "")
             let appSub = NSMenu()
-            // Say WHY this app is in the list. Without it the list reads as "apps you log into", which
-            // sent the user hunting for HDRezka-Client's non-existent sign-in screen.
-            let what = NSMenuItem(title: "saved: \(CLI.sessionLabel(b.evidence))", action: nil, keyEquivalent: "")
-            what.isEnabled = false
-            appSub.addItem(what)
-            appSub.addItem(NSMenuItem.separator())
-            appSub.addItem(make("What's Saved?…", #selector(sessionCheckApp(_:)), rep: b.key))
-            appSub.addItem(make("Back Up (Login + Data)…", #selector(backupApp(_:)), rep: b.key))
+            appSub.addItem(make("Back Up Login…", #selector(backupApp(_:)), rep: "\(b.key)|login"))
+            appSub.addItem(make("Back Up Sessions…", #selector(backupApp(_:)), rep: "\(b.key)|sessions"))
+            appSub.addItem(make("Back Up All…", #selector(backupApp(_:)), rep: "\(b.key)|all"))
+            appSub.addItem(.separator())
             appSub.addItem(make("Restore Backup…", #selector(restoreApp(_:)), rep: b.key))
             appItem.submenu = appSub
             backupSub.addItem(appItem)
@@ -711,20 +690,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Show the session-check report, including which SITES the cookies belong to — the thing that
-    /// actually tells a person whether a login is involved.
-    @objc func sessionCheckApp(_ s: NSMenuItem) {
-        guard let key = s.representedObject as? String else { return }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let r = CLI.run(["session-check", key])
-            let body = (r.out + r.err).trimmingCharacters(in: .whitespacesAndNewlines)
-            self.alertAsync("What's saved for \(key)",
-                            body.isEmpty ? "Nothing reported — the app may store nothing locally." : body)
-        }
-    }
-
     @objc func backupApp(_ s: NSMenuItem) {
-        guard let key = s.representedObject as? String else { return }
+        guard let rep = s.representedObject as? String else { return }
+        let parts = rep.split(separator: "|").map(String.init)
+        let key = parts[0], scope = parts.count > 1 ? parts[1] : "all"
         let disp = CLI.displayName(key)
         // decide on quit up front (confirmation is quick); the actual quit-and-wait happens in the
         // background so the 12 s wait never freezes the menu-bar UI
@@ -739,7 +708,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let panel = NSSavePanel()
         panel.title = "Back Up \(disp)"
-        panel.nameFieldStringValue = "multiapp-backup-\(key)-\(Self.stamp()).tar.gz"
+        panel.nameFieldStringValue = "multiapp-\(key)-\(scope)-\(Self.stamp()).tar.gz"
         panel.prompt = "Back Up"
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -751,14 +720,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.alertAsync("Couldn't back up \(disp)", "\(disp) is still running — please quit it manually and try again.")
                 return
             }
-            let r = CLI.run(["backup", key, url.path])
+            // login → only the sign-in files; sessions → data without the sign-in; all → everything
+            let args: [String] = scope == "login" ? ["session-backup", key, url.path]
+                : scope == "sessions" ? ["backup", key, url.path, "--no-login"]
+                : ["backup", key, url.path]
+            let r = CLI.run(args)
             let ok = r.code == 0
             self.setBusy(false)
             if !ok {
                 CLI.log("backup \(key) FAILED (exit \(r.code)) → \(url.path)\n  stdout: \(r.out)\n  stderr: \(r.err)")
             }
             self.alertAsync(ok ? "Backup complete" : "Backup failed",
-                            ok ? (r.out.split(separator: "\n").first(where: { $0.contains("backup written") }).map(String.init) ?? url.path)
+                            ok ? (r.out.split(separator: "\n").first(where: { $0.contains("backup written") || $0.contains("session saved") }).map(String.init) ?? url.path)
                                : ((r.err.isEmpty ? r.out : r.err) + "\n\n(details in ~/Library/Logs/Multiapp.log)"))
         }
     }

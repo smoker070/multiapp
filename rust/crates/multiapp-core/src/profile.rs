@@ -117,7 +117,7 @@ pub fn export(app: &str, name: &str, out: &std::path::Path, now: &str) -> Result
     if !dir.is_dir() {
         return Err(Error::LaunchFailed(format!("no such profile: {app}/{name}")));
     }
-    let s = crate::archive::create(&format!("{app}/{name}"), std::slice::from_ref(&dir), out, false, false, now)?;
+    let s = crate::archive::create(&format!("{app}/{name}"), std::slice::from_ref(&dir), out, crate::archive::Scope::Everything, false, now)?;
     // Archive paths are kept relative to the home folder. A profile root outside it (a custom
     // MULTIAPP_HOME) archives nothing — say so instead of handing over an empty file.
     if s.files == 0 {

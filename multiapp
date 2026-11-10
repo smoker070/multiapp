@@ -7,7 +7,7 @@
 # No binaries are modified. No env overrides needed. Keychain is never touched.
 set -euo pipefail
 
-VERSION="0.3.3"
+VERSION="0.3.4"
 
 # ================================================================ platform layer
 case "$(uname -s)" in
@@ -513,10 +513,10 @@ migratelist_scan() {
 }
 
 cmd_backup() {
-  local key="${1:-}" out="" inc=0
+  local key="${1:-}" out="" inc=0 nologin=0
   shift || true
-  while [ $# -gt 0 ]; do case "$1" in --include-cache) inc=1;; *) out="$1";; esac; shift; done
-  [ -n "$key" ] || die "usage: multiapp backup <app> [out.tar.gz] [--include-cache]"
+  while [ $# -gt 0 ]; do case "$1" in --include-cache) inc=1;; --no-login) nologin=1;; *) out="$1";; esac; shift; done
+  [ -n "$key" ] || die "usage: multiapp backup <app> [out.tar.gz] [--include-cache] [--no-login]"
   local spec; spec="$(full_backup_spec "$key" 2>/dev/null)" || die "no backup profile for '$key' — see: multiapp migrate-list"
   app_is_running "$key" && die "'$key' is running — quit it first (a live app makes an inconsistent backup)"
 
@@ -538,17 +538,27 @@ cmd_backup() {
   if [ "$inc" = 0 ]; then
     while IFS= read -r line; do case "$line" in "X "*) exargs+=(--exclude="${line#X }");; esac; done <<< "$spec"
   fi
+  # --no-login: keep the app's data (chats, settings) but leave the sign-in files out
+  if [ "$nologin" = 1 ]; then
+    local ap sp; ap="$(resolve_app_path "$key" 2>/dev/null || true)"
+    if [ -n "$ap" ]; then
+      while IFS= read -r sp; do [ -n "$sp" ] && exargs+=(--exclude="${sp#$HOME/}"); done < <(session_paths "$ap")
+    fi
+    info "leaving the login out (sessions and data only)"
+  fi
 
   [ "$verdict" = experimental ] && warn "'$key' backup is EXPERIMENTAL — same-Mac restore should be full, but cross-machine behavior is unverified"
-  warn "this archive will contain your private app data (and, on this Mac, your logged-in session) — keep it safe"
+  if [ "$nologin" = 1 ]; then warn "this archive will contain your private app data — keep it safe"
+  else warn "this archive will contain your private app data (and, on this Mac, your logged-in session) — keep it safe"; fi
   [ "$inc" = 0 ] && [ "${#exargs[@]}" -gt 0 ] && info "excluding caches (use --include-cache to keep them)"
 
   # manifest describing what/where, so restore knows the exact target paths
   local stage; stage="$(mktemp -d)"
   {
     printf '{\n  "multiapp_backup": "1",\n  "app": "%s",\n  "appVersion": "%s",\n  "authLocus": "%s",\n  "verdict": "%s",\n' "$key" "$ver" "$locus" "$verdict"
-    printf '  "sourceHost": "%s",\n  "macOS": "%s",\n  "includedCache": %s,\n  "dataRoots": [\n' \
-      "$(scutil --get ComputerName 2>/dev/null || hostname)" "$(sw_vers -productVersion 2>/dev/null)" "$([ "$inc" = 1 ] && echo true || echo false)"
+    printf '  "sourceHost": "%s",\n  "macOS": "%s",\n  "includedCache": %s,\n  "noLogin": %s,\n  "dataRoots": [\n' \
+      "$(scutil --get ComputerName 2>/dev/null || hostname)" "$(sw_vers -productVersion 2>/dev/null)" \
+      "$([ "$inc" = 1 ] && [ "$nologin" = 0 ] && echo true || echo false)" "$([ "$nologin" = 1 ] && echo true || echo false)"
     local i=0; for r in "${roots[@]}"; do [ $i -gt 0 ] && printf ',\n'; printf '    "%s"' "$r"; i=1; done
     # paths RELATIVE to $HOME: unique per member (two roots can share a basename, e.g.
     # Application Support/com.openai.chat and HTTPStorages/com.openai.chat) and portable across users
@@ -589,6 +599,18 @@ cmd_restore() {
   local tmp; tmp="$(mktemp -d)"
   tar -xzf "$file" -C "$tmp" 2>/dev/null || { rm -rf "$tmp"; die "cannot extract archive"; }
   local man="$tmp/manifest.json"
+  # one Restore for every kind: a login-only archive goes to session-restore
+  if py -c "import json,sys;sys.exit(0 if 'multiapp_session' in json.load(open('$man')) else 1)" 2>/dev/null; then
+    local ap bid abid; ap="$(resolve_app_path "$key" 2>/dev/null)" || { rm -rf "$tmp"; die "app not found: '$key'"; }
+    bid="$(plist_get "$ap" CFBundleIdentifier)"
+    abid="$(py -c "import json;print(json.load(open('$man')).get('bundleId',''))" 2>/dev/null)"
+    rm -rf "$tmp"
+    [ -z "$abid" ] || [ "$abid" = "$bid" ] || die "this backup is for another app ($abid), not '$key'"
+    if [ "$force" = 1 ]; then cmd_session_restore "$key" "$file" --force; else cmd_session_restore "$key" "$file"; fi
+    return
+  fi
+  local aapp; aapp="$(py -c "import json;print(json.load(open('$man')).get('app',''))" 2>/dev/null)"
+  [ -z "$aapp" ] || [ "$aapp" = "$key" ] || { rm -rf "$tmp"; die "this backup is for another app ('$aapp'), not '$key'"; }
   local aver; aver="$(py -c "import json;print(json.load(open('$man')).get('appVersion','?'))" 2>/dev/null)"
   local iver; iver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$(resolve_app_path "$key" 2>/dev/null)/Contents/Info.plist" 2>/dev/null || echo unknown)"
   [ "$aver" != "$iver" ] && warn "archive is from $key $aver; installed is $iver — restore anyway if you accept possible format drift"
@@ -611,6 +633,8 @@ import json;d=json.load(open('$man'))
   # (Found the hard way: a Telegram restore cut its group container from 18,918 files to 521.)
   local incache; incache="$(py -c "import json;print(json.load(open('$man')).get('includedCache',True))" 2>/dev/null)"
   local merge=0; [ "$incache" = "False" ] || [ "$incache" = "false" ] && merge=1
+  local nolog; nolog="$(py -c "import json;print(json.load(open('$man')).get('noLogin',False))" 2>/dev/null)"
+  [ "$nolog" = "True" ] && merge=1
 
   local bk="$TRASH/restore-backup-$key-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$bk"
   [ "$merge" = 1 ] && info "archive was made without caches → merging into existing data (nothing is deleted)"
@@ -1695,7 +1719,7 @@ usage: multiapp <command> [args]
   session-backup  <app> [out]   save ONLY the login session (any installed app; small + fast)
   session-restore <app> <file>  put a saved login back (same Mac)
   migrate-list                  apps holding a saved session on this machine, and what KIND it is
-  backup  <app> [out] [--include-cache]   back up an app's REAL data (same-Mac restore = full, incl. login)
+  backup  <app> [out] [--include-cache] [--no-login]  back up an app's REAL data (same-Mac restore = full, incl. login)
   restore <app> <archive>       restore a backup (quits nothing; stages current data to Trash first)
   delete  <app> <profile>       move a profile to Multiapp Trash (staged, recoverable)
   trash   [list|purge]          inspect / empty the staged trash

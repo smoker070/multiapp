@@ -270,9 +270,9 @@ fn advanced(args: &[&str]) -> Result<String, String> {
         // An allowlist, not a passthrough: these arguments come from a web view, and a UI bug must
         // not be able to turn into "run whatever you like".
         const ALLOWED: &[&str] = &[
-            "migrate-list", "backup", "restore", "session-check", "session-backup",
+            "migrate-list", "backup", "restore", "session-backup",
             "session-restore", "app-export", "app-import", "list-installed", "sessions",
-            "transfer", "accounts", "export", "import", "scan", "probe", "apps", "doctor",
+            "transfer", "accounts", "export", "import", "scan", "probe", "apps",
         ];
         let first = args.first().copied().unwrap_or("");
         if !ALLOWED.contains(&first) {
@@ -290,10 +290,10 @@ fn advanced(args: &[&str]) -> Result<String, String> {
         }
 
         // A reporting command uses its exit code to say "I found something", not "I could not
-        // run". `doctor` exits 1 for a missing app and still prints the whole report, and
+        // run". `probe` exits non-zero for an app that ignored the flag and still prints a report, and
         // throwing that away left the window showing only "failed (exit status: 1)" — the one
         // thing the user did not need to know. If it produced a report, the report IS the answer.
-        const REPORTS_VIA_EXIT_CODE: &[&str] = &["doctor", "session-check", "probe"];
+        const REPORTS_VIA_EXIT_CODE: &[&str] = &["probe"];
         if REPORTS_VIA_EXIT_CODE.contains(&first) && !stdout.trim().is_empty() {
             return Ok(if stderr.is_empty() { stdout } else { format!("{stdout}\n{stderr}") });
         }
@@ -311,11 +311,6 @@ fn advanced(args: &[&str]) -> Result<String, String> {
     }
 }
 
-/// Run one of the macOS-only commands and hand back its output verbatim.
-#[tauri::command(async)]
-fn run_advanced(args: Vec<String>) -> Result<String, String> {
-    advanced(&args.iter().map(String::as_str).collect::<Vec<_>>())
-}
 
 #[derive(Serialize)]
 struct SessionDto {
@@ -425,11 +420,6 @@ fn import_sessions(profile: String, file: String) -> Result<String, String> {
     advanced(&["import", "claude", &profile, &file])
 }
 
-/// What session data an app holds and whether it would survive a move to another Mac.
-#[tauri::command(async)]
-fn session_check(app: String) -> Result<String, String> {
-    advanced(&["session-check", &app])
-}
 
 
 #[derive(Serialize)]
@@ -457,51 +447,6 @@ fn list_app_data() -> Result<Vec<AppDataDto>, String> {
         .collect())
 }
 
-#[derive(Serialize)]
-struct SessionAppDto {
-    /// The data folder's name — what every backup and report command is keyed by.
-    name: String,
-    /// The installed application that owns it, as the user knows it.
-    app: String,
-    evidence: String,
-}
-
-/// Applications that are installed AND hold a session — the Sessions picker.
-///
-/// `list_app_data` answers a different question: every data folder with a session in it, which
-/// includes the folders uninstalled apps leave behind. That is right for backups (the data is
-/// still worth saving) and wrong here, where offering a session for an app that is not on the
-/// machine is just noise.
-#[tauri::command(async)]
-fn session_apps() -> Result<Vec<SessionAppDto>, String> {
-    // Only the macOS branch below adds to this, so elsewhere the `mut` is unused — and this
-    // file is built on Windows, where I cannot see the warning.
-    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
-    let mut installed: Vec<String> = detect_apps().into_iter().map(|a| a.name).collect();
-    // Per-user installs. Not part of detect_apps because `launch` cannot resolve them yet, and
-    // the New Profile list must only offer what can actually be launched.
-    #[cfg(target_os = "macos")]
-    if let Ok(home) = std::env::var("HOME") {
-        if let Ok(rd) = std::fs::read_dir(PathBuf::from(home).join("Applications")) {
-            for p in rd.flatten().map(|e| e.path()) {
-                if p.extension().and_then(|s| s.to_str()) == Some("app") {
-                    if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                        installed.push(stem.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(appdata::installed()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .filter_map(|a| {
-            let app = appdata::owner_of(&a.name, &installed)?.to_string();
-            Some(SessionAppDto { name: a.name, app, evidence: a.evidence.label().to_string() })
-        })
-        .collect())
-}
 
 /// Bytes one app holds. Slow on purpose — called once per visible row, never in a loop up front.
 #[tauri::command(async)]
@@ -520,12 +465,18 @@ fn now_stamp() -> String {
 
 /// Archive an app's data, or just the files that carry its login.
 #[tauri::command(async)]
-fn backup_app(app: String, out: String, sessions_only: bool) -> Result<String, String> {
+fn backup_app(app: String, out: String, scope: String) -> Result<String, String> {
+    let scope = match scope.as_str() {
+        "login" => archive::Scope::Login,
+        "sessions" => archive::Scope::Sessions,
+        "everything" => archive::Scope::Everything,
+        other => return Err(format!("unknown backup scope '{other}'")),
+    };
     let dirs = appdata::dirs_for(&app).map_err(|e| e.to_string())?;
     if dirs.is_empty() {
         return Err(format!("no local data found for '{app}'"));
     }
-    let s = archive::create(&app, &dirs, std::path::Path::new(&out), sessions_only, false, &now_stamp())
+    let s = archive::create(&app, &dirs, std::path::Path::new(&out), scope, false, &now_stamp())
         .map_err(|e| e.to_string())?;
     Ok(format!("{} file(s), {} — {}", s.files, human(s.bytes), s.path.display()))
 }
@@ -621,13 +572,11 @@ fn main() {
             profile_size,
             reveal_profile,
             advanced_available,
-            run_advanced,
             claude_sessions,
             claude_accounts,
             transfer_sessions,
             export_sessions,
             import_sessions,
-            session_check,
             trash_list,
             trash_count,
             trash_restore,
@@ -635,7 +584,6 @@ fn main() {
             trash_empty,
             list_app_data,
             app_data_size,
-            session_apps,
             export_profile,
             backup_app,
             archive_info,
