@@ -7,12 +7,7 @@
 
 <p align="center">
   <img alt="platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-informational">
-  <img alt="macos" src="https://img.shields.io/badge/macOS-verified-success">
-  <img alt="windows" src="https://img.shields.io/badge/Windows-launch%20verified%20%C2%B7%20stop%20unproven-yellow">
-  <img alt="linux" src="https://img.shields.io/badge/Linux-CI%20verified-success">
   <img alt="rust" src="https://img.shields.io/badge/Rust-2021-b7410e">
-  <img alt="ui" src="https://img.shields.io/badge/desktop%20UI-Tauri%202-24c8db">
-  <img alt="tests" src="https://img.shields.io/badge/rust%20tests-19%20passing-success">
   <img alt="licence" src="https://img.shields.io/badge/licence-MIT-blue">
 </p>
 
