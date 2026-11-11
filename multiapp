@@ -7,7 +7,7 @@
 # No binaries are modified. No env overrides needed. Keychain is never touched.
 set -euo pipefail
 
-VERSION="0.3.4"
+VERSION="0.3.5"
 
 # ================================================================ platform layer
 case "$(uname -s)" in
@@ -92,21 +92,34 @@ app_installed() { # $1=registry app path → 0 if present
   if [ "$PLATFORM" = darwin ]; then [ -d "$1" ]; else [ -x "$1" ] || command -v "$1" >/dev/null 2>&1; fi
 }
 
-plat_launch() { # $1=app path  $2=data dir  then extra flags + passthrough args
-  local app="$1" data="$2"; shift 2
+data_flags() { # $1=adapter $2=data dir → one flag per line: how this app family takes a profile dir
+  case "$1" in
+    firefox)  printf '%s\n' "-profile" "$2" "-no-remote" ;;
+    tdesktop) printf '%s\n' "-many" "-workdir" "$2/" ;;      # trailing slash; -many or it hands off to the running copy
+    *)        printf '%s\n' "--user-data-dir=$2" ;;          # Chromium/Electron: EQUALS form, always
+  esac
+}
+
+plat_launch() { # $1=app path  $2=data dir  $3=adapter  then extra flags + passthrough args
+  local app="$1" data="$2" adapter="$3"; shift 3
+  local flags=() f
+  while IFS= read -r f; do flags+=("$f"); done < <(data_flags "$adapter" "$data")
   if [ "$PLATFORM" = darwin ]; then
     # open -n forces a new instance; --args passes flags to the app
-    open -n "$app" --args --user-data-dir="$data" "$@"
+    open -n "$app" --args "${flags[@]}" "$@"
   else
-    # Linux: separate --user-data-dir → separate singleton lock → new instance
+    # Linux: a separate data dir → separate singleton lock → new instance
     local bin; bin="$(app_exec "$app")"
-    setsid "$bin" --user-data-dir="$data" "$@" >/dev/null 2>&1 < /dev/null &
+    setsid "$bin" "${flags[@]}" "$@" >/dev/null 2>&1 < /dev/null &
   fi
 }
 
 # =============================================================== registry
 # key|app path|display name|adapter|verdict|note
 # adapter: electron = --user-data-dir only · vscode = + --extensions-dir
+#          firefox = -profile <dir> -no-remote · tdesktop = -many -workdir <dir>/
+# Only apps where a profile gives a SEPARATE LOGIN are "supported". Sandboxed/native apps keep one
+# login per bundle id whatever we do, so they stay "unsupported" and are never offered.
 # NB paths below are macOS. On Linux run `multiapp scan` to populate registry.local
 # with the real binary paths for your distro (app locations vary too much to hardcode).
 REGISTRY="\
@@ -119,19 +132,27 @@ vscode|/Applications/Visual Studio Code.app|Visual Studio Code|vscode|supported|
 antigravity|/Applications/Antigravity.app|Antigravity|vscode|supported|
 antigravity-ide|/Applications/Antigravity IDE.app|Antigravity IDE|vscode|supported|
 openmtp|/Applications/OpenMTP.app|OpenMTP|electron|supported|
-gemini|/Applications/Gemini.app|Gemini|none|unsupported|Native app, no isolation lever exists (E6).
+gemini|/Applications/Gemini.app|Gemini|none|unsupported|Sandboxed native app: every window shares one login.
 chatgpt-classic|/Applications/ChatGPT Classic.app|ChatGPT Classic|none|unsupported|Native pre-merge app, no levers; shares OpenAI identity with new ChatGPT.
-telegram|/Applications/Telegram.app|Telegram|none|unsupported|Sandboxed (container is bundle-ID-keyed). Use Telegram's built-in multi-account instead.
-telegram-desktop|/Applications/Telegram Desktop.app|Telegram Desktop|none|unsupported|Separate app from Telegram for macOS, with its own login. Not Electron, so no profiles — but its data/session back up fine.
+telegram|/Applications/Telegram.app|Telegram|none|unsupported|Sandboxed: every window shares one login. Use Telegram's built-in multi-account, or Telegram Desktop.
+telegram-desktop|/Applications/Telegram Desktop.app|Telegram Desktop|tdesktop|supported|
+firefox|/Applications/Firefox.app|Firefox|firefox|supported|
+google-chrome|/Applications/Google Chrome.app|Google Chrome|electron|supported|
 hdrezka|/Applications/HDRezka-Client.app|HDRezka-Client|none|unsupported|App overrides userData in its own code (E11); flag is ignored."
 
 full_registry() {
-  printf '%s\n' "$REGISTRY"
-  [ -f "$USER_REG" ] && grep -v '^[[:space:]]*$' "$USER_REG" || true
+  { printf '%s\n' "$REGISTRY"
+    [ -f "$USER_REG" ] && grep -v '^[[:space:]]*$' "$USER_REG" || true
+  } | awk -F'|' '!seen[$1]++'
 }
 
-reg_field() { # $1=key $2=field-index(1..6)
-  full_registry | awk -F'|' -v k="$1" -v f="$2" '$1==k {print $f; exit}'
+# $1 = key, or the app's display name: the desktop app names profile folders "Google Chrome",
+# not "google-chrome", and those profiles must clone/launch/rename from here too.
+reg_field() { # $1=key|display name $2=field-index(1..6)
+  full_registry | awk -F'|' -v k="$1" -v f="$2" '
+    $1==k {print $f; hit=1; exit}
+    tolower($3)==tolower(k) && !alt {alt=$f; have=1}
+    END { if (!hit && have) print alt }'
 }
 
 die()  { printf 'multiapp: %s\n' "$*" >&2; exit 1; }
@@ -169,18 +190,22 @@ running_pids() { # $1=profile dir → pids of ANY process bound to THIS profile
   # would contain it and awk would match itself (the old code needed `grep -v grep` for the same
   # reason). Passing only the directory keeps the full flag string out of our own argv.
   ps -eo pid,args 2>/dev/null | awk -v d="$1" '
-    BEGIN { n = "--user-data-dir=" d }
-    { i = index($0, n)
-      if (i > 0) {
-        nxt = substr($0, i + length(n), 1)
-        if (nxt == "" || nxt == " ") print $1
+    BEGIN { n[1] = "--user-data-dir=" d; n[2] = " -profile " d; n[3] = " -workdir " d "/" }
+    { for (k = 1; k <= 3; k++) {
+        i = index($0, n[k])
+        if (i > 0) {
+          nxt = substr($0, i + length(n[k]), 1)
+          if (nxt == "" || nxt == " ") { print $1; break }
+        }
       }
     }'
 }
 
 main_pid() { # $1=app path $2=profile dir → pid of the main process only
   local exe; exe="$(app_exec "$1")"
-  ps -eo pid,args 2>/dev/null | grep -F -- "$exe --user-data-dir=$2" | grep -v grep | awk '{print $1}' | head -1
+  # the main process is the one whose FIRST argument is the profile switch (helpers carry it later)
+  ps -eo pid,args 2>/dev/null | grep -F -e "$exe --user-data-dir=$2" -e "$exe -profile $2" -e "$exe -many -workdir $2/" \
+    | grep -v grep | awk '{print $1}' | head -1
 }
 
 is_running() { [ -n "$(running_pids "$1")" ]; }
@@ -1081,7 +1106,7 @@ cmd_apps() {
 # --- app discovery / scan ----------------------------------------------------
 scan_darwin() {
   local app base display key runtime pc sb
-  local added=0 native=0 sandboxed=0 known=0
+  local added=0 native=0 sandboxed=0 known=0 nologin=0
   local d
   for d in "${SCAN_DIRS[@]}"; do
     [ -d "$d" ] || continue
@@ -1098,6 +1123,12 @@ scan_darwin() {
       [ -z "$runtime" ] && { native=$((native+1)); continue; }
       sb="$(codesign -d --entitlements :- "$app" 2>/dev/null | plutil -extract 'com\.apple\.security\.app-sandbox' raw -o - - 2>/dev/null || true)"
       [ "$sb" = "true" ] && { sandboxed=$((sandboxed+1)); continue; }
+      # A profile is only worth having for an app people sign in to. One that has been used here
+      # and left no session behind (no cookies, no web storage) is skipped; a never-opened app
+      # has nothing to judge by, so it stays.
+      if [ -d "$AS_DIR/$(basename "$app" .app)" ] && [ "$(session_evidence "$app" 2>/dev/null || echo none)" = none ]; then
+        nologin=$((nologin+1)); continue
+      fi
       base="$(basename "$app" .app)"; display="$base"
       key="$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')"
       [ -n "$key" ] || continue
@@ -1108,7 +1139,7 @@ scan_darwin() {
     done
   done
   info ""
-  info "scan done: $added added, $known known, $native native (no lever), $sandboxed sandboxed"
+  info "scan done: $added added, $known known, $native native (no lever), $sandboxed sandboxed, $nologin without a login"
   [ "$added" -gt 0 ] && info "verify with:  multiapp probe <key>"
 }
 
@@ -1178,7 +1209,7 @@ cmd_launch() {
   fi
   mkdir -p "$dir/data"
   # EQUALS form for --user-data-dir; ${extra[@]+…} guards macOS bash 3.2 + set -u
-  plat_launch "$app" "$dir/data" ${extra[@]+"${extra[@]}"} "$@"
+  plat_launch "$app" "$dir/data" "$adapter" ${extra[@]+"${extra[@]}"} "$@"
   date +%s > "$dir/.last-launch" 2>/dev/null || true
   info "launched $key/$name"
 }
@@ -1340,7 +1371,7 @@ cmd_probe() { # canary: does this app honor --user-data-dir= ?  (seed of E10)
   local tmp="$ROOT/Probes/$key-$$"
   mkdir -p "$tmp"
   info "probing $key (launches for ~10s)…"
-  plat_launch "$path" "$tmp"
+  plat_launch "$path" "$tmp" "$(reg_field "$key" 4)"
   sleep 10
   local verdict newv newnote
   if [ -n "$(ls "$tmp" 2>/dev/null)" ]; then

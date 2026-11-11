@@ -8,6 +8,10 @@
 use multiapp_core::{appdata, archive, launch, paths, profile, trash};
 use serde::Serialize;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use tauri::{Emitter, Manager};
+use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_updater::UpdaterExt;
 
 #[derive(Serialize)]
 struct ProfileDto {
@@ -59,14 +63,18 @@ fn profiles_root() -> Result<String, String> {
     paths::profiles_root().map(|p| p.display().to_string()).map_err(|e| e.to_string())
 }
 
-/// Apps on this machine that are plausible profile targets, so the New Profile dialog can offer a
-/// list instead of asking someone to type an exact name. Deliberately permissive: `probe` and the
-/// launch itself are what actually decide whether an app honours the flag.
+/// Apps on this machine that can hold a SEPARATE LOGIN in a profile, for the New Profile dialog.
+/// Not every installed app: a sandboxed or native app (Telegram for macOS, Gemini) shares one
+/// login across every window, and an app nobody signs in to (OBS, UTM) gains nothing from a
+/// profile. `adapter::offered` decides.
 #[tauri::command(async)]
 fn detect_apps() -> Vec<AppDto> {
     let mut out: Vec<AppDto> = Vec::new();
     let mut push = |name: String, path: PathBuf| {
-        if path.exists() && !out.iter().any(|a| a.name == name) {
+        if path.exists()
+            && !out.iter().any(|a| a.name == name)
+            && multiapp_core::adapter::offered(&path).is_some()
+        {
             out.push(AppDto { name, path: path.display().to_string() });
         }
     };
@@ -98,6 +106,15 @@ fn detect_apps() -> Vec<AppDto> {
                 }
             }
         }
+        // The two non-Chromium families, at their usual install paths.
+        for var in ["ProgramFiles", "ProgramFiles(x86)"] {
+            if let Ok(b) = std::env::var(var) {
+                push("Firefox".to_string(), PathBuf::from(b).join(r"Mozilla Firefox\firefox.exe"));
+            }
+        }
+        if let Ok(b) = std::env::var("APPDATA") {
+            push("Telegram Desktop".to_string(), PathBuf::from(b).join(r"Telegram Desktop\Telegram.exe"));
+        }
         for var in ["LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"] {
             let Ok(base) = std::env::var(var) else { continue };
             for sub in ["Programs", ""] {
@@ -117,7 +134,13 @@ fn detect_apps() -> Vec<AppDto> {
             }
         }
     } else {
-        for c in ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"] {
+        for c in [
+            "/usr/bin/google-chrome",
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/firefox",
+            "/usr/bin/telegram-desktop",
+        ] {
             let p = PathBuf::from(c);
             if let Some(nm) = p.file_name().and_then(|s| s.to_str()) {
                 push(nm.to_string(), p.clone());
@@ -133,6 +156,17 @@ fn detect_apps() -> Vec<AppDto> {
 #[tauri::command(async)]
 fn app_exists(app: String) -> bool {
     launch::resolve_app(&app).is_ok()
+}
+
+/// Can a profile for this app hold its own login? "ok", "missing" (no such app), or "nologin"
+/// (it exists, but every window of it shares one login — a profile would be for show).
+#[tauri::command(async)]
+fn app_check(app: String) -> &'static str {
+    match launch::resolve_app(&app) {
+        Err(_) => "missing",
+        Ok(p) if multiapp_core::adapter::kind_of(&p).is_none() => "nologin",
+        Ok(_) => "ok",
+    }
 }
 
 
@@ -553,9 +587,113 @@ fn trash_empty() -> Result<String, String> {
     Ok(format!("{n} item(s), {}", human(bytes)))
 }
 
+/* ---------------------------------------------------------------- updates
+   New versions are GitHub releases. `latest.json` on the newest release names the file for each
+   platform plus its signature; the updater refuses a file that the release key did not sign. */
+
+#[derive(Serialize, Clone)]
+struct UpdateDto {
+    version: String,
+    current: String,
+    notes: String,
+}
+
+/// The update found by the last check, so a window that loads after the check still sees it.
+#[derive(Default)]
+struct UpdateState {
+    found: Mutex<Option<UpdateDto>>,
+    notified: Mutex<Option<String>>,
+}
+
+async fn find_update(app: &tauri::AppHandle) -> Result<Option<UpdateDto>, String> {
+    let u = match app.updater().map_err(|e| e.to_string())?.check().await {
+        Ok(u) => u,
+        // The newest release carries no update file (older releases did not): nothing to install.
+        Err(tauri_plugin_updater::Error::ReleaseNotFound) => None,
+        Err(e) => return Err(format!("couldn't reach GitHub ({e})")),
+    };
+    let dto = u.map(|u| UpdateDto {
+        version: u.version.clone(),
+        current: u.current_version.clone(),
+        notes: u.body.clone().unwrap_or_default(),
+    });
+    *app.state::<UpdateState>().found.lock().unwrap() = dto.clone();
+    Ok(dto)
+}
+
+/// Tell the user once per version: a system notification and a banner in the window.
+fn announce(app: &tauri::AppHandle, u: &UpdateDto) {
+    let st = app.state::<UpdateState>();
+    let mut seen = st.notified.lock().unwrap();
+    if seen.as_deref() == Some(u.version.as_str()) {
+        return;
+    }
+    *seen = Some(u.version.clone());
+    let _ = app.emit("update-available", u.clone());
+    let _ = app
+        .notification()
+        .builder()
+        .title(format!("Multiapp {} is available", u.version))
+        .body("Open Multiapp and click Update to install it.")
+        .show();
+}
+
+/// Checks a few seconds after start, then every six hours. A failed check (offline, GitHub
+/// down) is silent: the next one tries again.
+fn watch_for_updates(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        loop {
+            if let Ok(Some(u)) = tauri::async_runtime::block_on(find_update(&app)) {
+                announce(&app, &u);
+            }
+            std::thread::sleep(std::time::Duration::from_secs(6 * 60 * 60));
+        }
+    });
+}
+
+/// The update already found, if any (the window asks on load).
+#[tauri::command(async)]
+fn pending_update(st: tauri::State<UpdateState>) -> Option<UpdateDto> {
+    st.found.lock().unwrap().clone()
+}
+
+/// "Check for updates" in Settings.
+#[tauri::command(async)]
+async fn check_update(app: tauri::AppHandle) -> Result<Option<UpdateDto>, String> {
+    find_update(&app).await
+}
+
+/// Download, verify the signature, install, restart. On Windows the installer closes the app
+/// and starts the new one itself.
+#[tauri::command(async)]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    let u = app
+        .updater()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Multiapp is already up to date.".to_string())?;
+    u.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+    app.restart();
+}
+
+#[tauri::command(async)]
+fn app_version(app: tauri::AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
+        .manage(UpdateState::default())
+        .setup(|app| {
+            watch_for_updates(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             list_profiles,
             create_profile,
@@ -564,6 +702,7 @@ fn main() {
             profiles_root,
             detect_apps,
             app_exists,
+            app_check,
             in_start_menu,
             add_to_start_menu,
             clone_profile,
@@ -588,6 +727,10 @@ fn main() {
             backup_app,
             archive_info,
             restore_archive,
+            pending_update,
+            check_update,
+            install_update,
+            app_version,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the Multiapp window");

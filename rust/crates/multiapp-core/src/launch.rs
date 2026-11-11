@@ -20,12 +20,31 @@ pub fn resolve_app(reference: &str) -> Result<std::path::PathBuf, Error> {
             return Ok(cand);
         }
     }
+    // The menu-bar engine names profile folders by key ("google-chrome", "telegram-desktop"), not
+    // by app name. Those profiles must launch from here too: match the key against installed apps.
+    #[cfg(target_os = "macos")]
+    for base in ["/Applications", "/Applications/Utilities"] {
+        let Ok(rd) = std::fs::read_dir(base) else { continue };
+        for p in rd.flatten().map(|e| e.path()) {
+            let is_app = p.extension().and_then(|s| s.to_str()) == Some("app");
+            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if is_app && key_of(stem) == key_of(reference) {
+                return Ok(p);
+            }
+        }
+    }
     if cfg!(target_os = "windows") {
         if let Some(p) = resolve_app_windows(reference) {
             return Ok(p);
         }
     }
     Err(Error::AppNotFound(reference.to_string()))
+}
+
+/// "Google Chrome" and "google-chrome" are the same app: lower-case, spaces as hyphens.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn key_of(name: &str) -> String {
+    name.to_lowercase().replace(' ', "-")
 }
 
 /// Windows install layouts, in the order they actually occur. Compiled on EVERY platform on purpose:
@@ -74,14 +93,16 @@ fn resolve_app_windows(reference: &str) -> Option<std::path::PathBuf> {
 
 pub fn launch(app: &Path, data_dir: &Path, extra: &[String]) -> Result<(), Error> {
     std::fs::create_dir_all(data_dir).map_err(Error::Io)?;
-    let flag = format!("--user-data-dir={}", data_dir.display()); // equals form, always
+    // An app outside the three families (an old profile made before the list was narrowed) is
+    // launched the Chromium way, as it always was.
+    let flags = crate::adapter::kind_of(app).unwrap_or(crate::adapter::Kind::Chromium).args(data_dir);
 
     if cfg!(target_os = "macos") {
         // macOS alone needs `open -n`: Launch Services would otherwise just focus the running copy.
         // `open` normally returns immediately. It does NOT when there is no window server: CI hung
         // here for ten minutes. Bound the wait so a stuck LaunchServices is reported, not endured.
         let mut child = Command::new("open")
-            .arg("-n").arg(app).arg("--args").arg(&flag).args(extra)
+            .arg("-n").arg(app).arg("--args").args(&flags).args(extra)
             .spawn().map_err(Error::Io)?;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
@@ -106,7 +127,7 @@ pub fn launch(app: &Path, data_dir: &Path, extra: &[String]) -> Result<(), Error
         // any terminal, script or CI step: the shell would appear to freeze until the browser quits.
         // macOS avoids this only because `open -n` hands the launch to LaunchServices.
         let mut cmd = Command::new(app);
-        cmd.arg(&flag)
+        cmd.args(&flags)
             .args(extra)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())

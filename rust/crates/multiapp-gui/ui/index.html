@@ -136,9 +136,12 @@
   .sr { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 
   /* ----------------------------------------------------------------- main header */
-  .mainHead { display:flex; flex-wrap:wrap; align-items:flex-start; gap:11px; padding:17px 16px 13px; }
-  .mainHead .ttl { flex:1 1 200px; min-width:0; }
-  .headBtns { display:flex; gap:11px; flex-wrap:wrap; }
+  /* One line, always: the title shortens with an ellipsis, the buttons keep their place on the
+     right. The sidebar cannot be dragged wide enough to squeeze them (see MAIN_MIN). */
+  .mainHead { display:flex; flex-wrap:nowrap; align-items:flex-start; gap:11px; padding:17px 16px 13px; }
+  .mainHead .ttl { flex:1 1 0; min-width:0; }
+  .headBtns { display:flex; gap:11px; flex:none; }
+  .headBtns .btn { white-space:nowrap; }
   .mainHead h2 { margin:0 0 4px; font-size:18px; font-weight:680; letter-spacing:-.2px;
                  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .mainHead .sub { font-size:12.5px; color:var(--muted); }
@@ -282,6 +285,15 @@
          border-radius:7px; padding:3px 9px; font-size:11px; cursor:pointer; flex:none;
          transition:color .16s, border-color .16s, transform .12s var(--ease); }
   .pin:hover { color:var(--accent); border-color:var(--accent); transform:translateY(-1px); }
+  /* A new version: the one coloured control in the footer, so it is seen without being in the way. */
+  .upd { background:var(--accent); border:1px solid var(--accent); color:#fff; font-weight:600;
+         border-radius:7px; padding:3px 10px; font-size:11px; cursor:pointer; flex:none;
+         animation:rise .3s var(--ease) both; transition:transform .12s var(--ease), opacity .16s; }
+  .upd:hover { transform:translateY(-1px); }
+  .upd:active { transform:translateY(1px); }
+  .upd:disabled { opacity:.55; cursor:default; transform:none; }
+  .verRow { display:flex; align-items:center; gap:10px; }
+  .verRow .note { flex:1; margin:0; }
 
   /* Opens AND closes with the same motion.
      This was `display:none` plus an entrance keyframe: the sheet appeared with a flicker and
@@ -485,6 +497,7 @@
   <footer>
     <span id="status">…</span>
     <button class="pin" id="pin" hidden data-i18n="addStart">＋ Start Menu</button>
+    <button class="upd" id="updBtn" hidden></button>
   </footer>
 
   <!-- New / rename / clone all reuse one dialog: same shape, different verb -->
@@ -550,6 +563,12 @@
       </div>
       <label data-i18n="storage">Profile storage</label>
       <div class="note selectable" id="rootPath"></div>
+      <label data-i18n="updates">Updates</label>
+      <div class="verRow">
+        <div class="note" id="verLine"></div>
+        <button class="btn ghost" id="chkUpd" data-i18n="checkUpd">Check for updates</button>
+      </div>
+      <div class="hint" id="updMsg"></div>
       <div class="actions"><button class="btn ghost" id="sClose" data-i18n="close">Close</button></div>
     </div>
   </div>
@@ -649,11 +668,11 @@ const T = {
         evCookiesPlain:"website cookies (readable)", evWebData:"saved web data",
                 running:"running", stopped:"stopped", unknown:"unknown",
         noneTitle:"No profiles yet", noneBody:"Create one to run a second, separate copy of an app — its own login, cookies and settings.",
-        addStart:"＋ Start Menu", addedStart:"Added to the Start Menu",
+        updates:"Updates", checkUpd:"Check for updates", versionWord:"Version", checkingUpd:"Checking…", upToDate:"You have the latest version.", updTo:"Update to", updating:"Updating…", updFound:"A new version is ready:", updFailed:"Couldn't update:", addStart:"＋ Start Menu", addedStart:"Added to the Start Menu",
         launching:"Launching", quitting:"Asking it to quit…", stoppedMsg:"Stopped",
         notExit:"did not exit — quit it from the app itself", created:"Created", renamed:"Renamed",
         cloned:"Cloned", movedTrash:"Moved to Trash", found:"found on this machine",
-        notFound:"not found — check the name or paste a full path", bothRequired:"Both fields are required.",
+        noLogin:"This app keeps one login for every window, so a separate profile isn't possible.", notFound:"not found — check the name or paste a full path", bothRequired:"Both fields are required.",
         deleteTitle:"Delete profile", deleteBody:"This moves __N__ to Multiapp's Trash. Nothing is erased — it can be restored from there.",
         profiles:"profiles", profile:"profile", appData:"App data & logins",
         whatCanBackup:"What can be backed up", installedApps:"Installed apps",
@@ -697,7 +716,7 @@ const T = {
         pickAccount:"Choose which account receives the copies.",
         alreadyThere:"Those sessions are already in that account.",
         confirmTransferAcct:"Copy __N__ session(s) into '__T__', account: __A__?",
-                bkBtn:"Back up", rsBtn:"Restore…", convBtn:"Conversations", mLogin:"Login only", mSess:"Sessions, without login", mAll:"Everything",
+                bkBtn:"Back up", rsBtn:"Restore…", convBtn:"Move chats", mLogin:"Login only", mSess:"Sessions, without login", mAll:"Everything",
                         kindLogin:"login",
         kindSessions:"sessions",
         kindAll:"everything",
@@ -712,11 +731,11 @@ const T = {
         evCookiesPlain:"sayt cookie’lari (ochiq)", evWebData:"saqlangan veb-ma’lumotlar",
                 running:"ishlamoqda", stopped:"to‘xtagan", unknown:"noma’lum",
         noneTitle:"Hali profil yo‘q", noneBody:"Ilovaning ikkinchi, alohida nusxasini ishlatish uchun profil yarating — o‘z logini, cookie va sozlamalari bilan.",
-        addStart:"＋ Start menyusi", addedStart:"Start menyusiga qo‘shildi",
+        updates:"Yangilanishlar", checkUpd:"Yangilanishni tekshirish", versionWord:"Versiya", checkingUpd:"Tekshirilmoqda…", upToDate:"Sizda eng soʻnggi versiya.", updTo:"Yangilash:", updating:"Yangilanmoqda…", updFound:"Yangi versiya tayyor:", updFailed:"Yangilab boʻlmadi:", addStart:"＋ Start menyusi", addedStart:"Start menyusiga qo‘shildi",
         launching:"Ochilmoqda", quitting:"Yopishni so‘ramoqda…", stoppedMsg:"To‘xtatildi",
         notExit:"yopilmadi — ilovaning o‘zidan chiqing", created:"Yaratildi", renamed:"Nomi o‘zgartirildi",
         cloned:"Nusxa olindi", movedTrash:"Savatga ko‘chirildi", found:"bu kompyuterda topildi",
-        notFound:"topilmadi — nomni tekshiring yoki to‘liq yo‘lni kiriting", bothRequired:"Ikkala maydon ham to‘ldirilishi kerak.",
+        noLogin:"Bu ilova barcha oynalar uchun bitta logindan foydalanadi, alohida profil qilib boʻlmaydi.", notFound:"topilmadi — nomni tekshiring yoki to‘liq yo‘lni kiriting", bothRequired:"Ikkala maydon ham to‘ldirilishi kerak.",
         deleteTitle:"Profilni o‘chirish", deleteBody:"__N__ Multiapp savatiga ko‘chiriladi. Hech narsa yo‘qolmaydi — undan qaytarish mumkin.",
         profiles:"profil", profile:"profil", appData:"Ilova ma’lumotlari va loginlar",
         whatCanBackup:"Nimani saqlash mumkin", installedApps:"O‘rnatilgan ilovalar",
@@ -760,7 +779,7 @@ const T = {
         pickAccount:"Nusxalar qaysi akkauntga tushishini tanlang.",
         alreadyThere:"Bu sessiyalar allaqachon o‘sha akkauntda.",
         confirmTransferAcct:"__N__ ta sessiya '__T__' profilidagi __A__ akkauntiga nusxalansinmi?",
-                bkBtn:"Saqlash", rsBtn:"Tiklash…", convBtn:"Suhbatlar", mLogin:"Faqat login", mSess:"Sessiyalar, loginsiz", mAll:"Hammasi",
+                bkBtn:"Saqlash", rsBtn:"Tiklash…", convBtn:"Suhbatlarni koʻchirish", mLogin:"Faqat login", mSess:"Sessiyalar, loginsiz", mAll:"Hammasi",
                         kindLogin:"login",
         kindSessions:"sessiyalar",
         kindAll:"hammasi",
@@ -775,11 +794,11 @@ const T = {
         evCookiesPlain:"куки сайтов (открытые)", evWebData:"сохранённые веб-данные",
                 running:"работает", stopped:"остановлен", unknown:"неизвестно",
         noneTitle:"Профилей пока нет", noneBody:"Создайте профиль, чтобы запустить вторую, отдельную копию приложения — со своим входом, куками и настройками.",
-        addStart:"＋ Меню «Пуск»", addedStart:"Добавлено в меню «Пуск»",
+        updates:"Обновления", checkUpd:"Проверить обновления", versionWord:"Версия", checkingUpd:"Проверка…", upToDate:"У вас последняя версия.", updTo:"Обновить до", updating:"Обновление…", updFound:"Готова новая версия:", updFailed:"Не удалось обновить:", addStart:"＋ Меню «Пуск»", addedStart:"Добавлено в меню «Пуск»",
         launching:"Запуск", quitting:"Просим приложение закрыться…", stoppedMsg:"Остановлен",
         notExit:"не закрылся — закройте его из самого приложения", created:"Создан", renamed:"Переименован",
         cloned:"Клонирован", movedTrash:"Перемещён в корзину", found:"найдено на этом компьютере",
-        notFound:"не найдено — проверьте имя или укажите полный путь", bothRequired:"Оба поля обязательны.",
+        noLogin:"Это приложение использует один вход для всех окон, отдельный профиль невозможен.", notFound:"не найдено — проверьте имя или укажите полный путь", bothRequired:"Оба поля обязательны.",
         deleteTitle:"Удалить профиль", deleteBody:"__N__ будет перемещён в корзину Multiapp. Ничего не стирается — его можно восстановить.",
         profiles:"профилей", profile:"профиль", appData:"Данные приложений и входы",
         whatCanBackup:"Что можно сохранить", installedApps:"Установленные приложения",
@@ -823,7 +842,7 @@ const T = {
         pickAccount:"Выберите, в какой аккаунт скопировать.",
         alreadyThere:"Эти сессии уже в этом аккаунте.",
         confirmTransferAcct:"Скопировать __N__ сессий в «__T__», аккаунт: __A__?",
-                bkBtn:"Сохранить", rsBtn:"Восстановить…", convBtn:"Разговоры", mLogin:"Только вход", mSess:"Сессии, без входа", mAll:"Всё",
+                bkBtn:"Сохранить", rsBtn:"Восстановить…", convBtn:"Перенести чаты", mLogin:"Только вход", mSess:"Сессии, без входа", mAll:"Всё",
                         kindLogin:"вход",
         kindSessions:"сессии",
         kindAll:"всё",
@@ -838,6 +857,7 @@ function applyLang() {
   // A placeholder is an attribute, not text, so the sweep above cannot reach it.
   $("q").placeholder = t("search");
   $("tFind").placeholder = t("findApp");
+  if (typeof relabelUpdate === "function") relabelUpdate();
   $("sideGrip").title = t("resizeSide");
   render();   // same data, new words: render() animates nothing because the keys are unchanged
 }
@@ -1136,9 +1156,9 @@ $("app").oninput = () => {
   const v = $("app").value.trim(), h = $("appHint");
   if (!v) { h.textContent = ""; h.className = "hint"; return; }
   checkT = setTimeout(async () => {
-    const ok = await invoke("app_exists", { app: v });
-    h.textContent = ok ? t("found") : t("notFound");
-    h.className = "hint " + (ok ? "good" : "bad");
+    const st = await invoke("app_check", { app: v });   // "ok" | "missing" | "nologin"
+    h.textContent = t({ ok: "found", missing: "notFound", nologin: "noLogin" }[st]);
+    h.className = "hint " + (st === "ok" ? "good" : "bad");
   }, 250);
 };
 
@@ -1148,6 +1168,10 @@ $("pOk").onclick = async () => {
     $("nameHint").textContent = t("bothRequired"); $("nameHint").className = "hint bad"; return;
   }
   try {
+    // a profile for an app that shares one login across every window would only look like it works
+    if (mode === "new" && await invoke("app_check", { app }) === "nologin") {
+      $("appHint").textContent = t("noLogin"); $("appHint").className = "hint bad"; return;
+    }
     if (mode === "new")         { await invoke("create_profile", { app, name }); say(`${t("created")} ${name}`, "ok"); }
     else if (mode === "rename") { await invoke("rename_profile", { app, old: target.name, new: name }); say(`${t("renamed")} → ${name}`, "ok"); }
     else                        { await invoke("clone_profile",  { app, from: target.name, to: name }); say(`${t("cloned")} → ${name}`, "ok"); }
@@ -1177,7 +1201,10 @@ $("cOk").onclick = async () => {
 /* ---------------------------------------------------------------- sidebar width */
 // Drag the edge, or focus it and use ← →. Double-click puts it back. Remembered per machine.
 const SIDE_MIN = 170, SIDE_DEFAULT = 232;
-const sideMax = () => Math.max(SIDE_MIN, Math.min(480, innerWidth - 340));
+// The profile list keeps at least this much: title, Tools and New Profile on one line, and a
+// row wide enough to read its name and size. The sidebar gives way first, never the list.
+const MAIN_MIN = 500;
+const sideMax = () => Math.max(SIDE_MIN, Math.min(480, innerWidth - MAIN_MIN));
 function setSide(w, save = true) {
   w = Math.round(Math.max(SIDE_MIN, Math.min(sideMax(), w)));
   document.body.style.setProperty("--side", `${w}px`);
@@ -1185,6 +1212,12 @@ function setSide(w, save = true) {
   if (save) try { localStorage.setItem("sideW", String(w)); } catch (_) {}
 }
 try { const w = +localStorage.getItem("sideW"); if (w) setSide(w, false); } catch (_) {}
+// A window made narrower takes the width back from the sidebar, without forgetting the saved one.
+window.addEventListener("resize", () => {
+  let want = 0;
+  try { want = +localStorage.getItem("sideW"); } catch (_) {}
+  setSide(want || document.querySelector("aside").getBoundingClientRect().width, false);
+});
 $("sideGrip").onpointerdown = e => {
   const g = $("sideGrip"), left = document.querySelector("aside").getBoundingClientRect().left;
   g.setPointerCapture(e.pointerId); g.classList.add("drag"); document.body.classList.add("resizing");
@@ -1202,6 +1235,55 @@ $("sideGrip").onkeydown = e => {
   if (e.key === "ArrowLeft")  { setSide(cur - 16); e.preventDefault(); }
   if (e.key === "ArrowRight") { setSide(cur + 16); e.preventDefault(); }
 };
+
+
+/* ---------------------------------------------------------------- updates
+   The app checks GitHub on its own (at start, then every six hours) and posts a system
+   notification. Here the found version becomes a button: one click downloads, installs and
+   restarts. */
+let updVer = null;
+function showUpdate(u) {
+  if (!u) return;
+  updVer = u.version;
+  const b = $("updBtn");
+  b.textContent = `↑ ${t("updTo")} ${u.version}`; b.disabled = false; b.hidden = false;
+  const c = $("chkUpd");
+  c.textContent = `${t("updTo")} ${u.version}`;
+  $("updMsg").textContent = `${t("updFound")} ${u.version}`; $("updMsg").className = "hint good";
+}
+async function runUpdate() {
+  const b = $("updBtn"), c = $("chkUpd");
+  b.disabled = c.disabled = true;
+  b.textContent = c.textContent = t("updating");
+  say(t("updating"));
+  try { await invoke("install_update"); }        // the app restarts from inside this call
+  catch (e) {
+    say(`${t("updFailed")} ${e}`, "err");
+    $("updMsg").textContent = `${t("updFailed")} ${e}`; $("updMsg").className = "hint bad";
+    b.disabled = c.disabled = false;
+    showUpdate({ version: updVer });
+  }
+}
+$("updBtn").onclick = runUpdate;
+$("chkUpd").onclick = async () => {
+  if (updVer) return runUpdate();
+  const c = $("chkUpd"), m = $("updMsg");
+  c.disabled = true; m.textContent = t("checkingUpd"); m.className = "hint";
+  try {
+    const u = await invoke("check_update");
+    if (u) showUpdate(u); else { m.textContent = t("upToDate"); m.className = "hint good"; }
+  } catch (e) { m.textContent = `${t("updFailed")} ${e}`; m.className = "hint bad"; }
+  c.disabled = false;
+};
+let appVer = "";
+// called by applyLang: these labels carry a version number, so they are built here, not swept
+function relabelUpdate() {
+  if (appVer) $("verLine").textContent = `${t("versionWord")} ${appVer}`;
+  if (updVer) showUpdate({ version: updVer });
+}
+invoke("app_version").then(v => { appVer = v; relabelUpdate(); }).catch(() => {});
+invoke("pending_update").then(showUpdate).catch(() => {});
+window.__TAURI__.event?.listen("update-available", e => showUpdate(e.payload));
 
 /* ---------------------------------------------------------------- settings */
 $("settings").onclick = async () => {

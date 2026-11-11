@@ -34,6 +34,7 @@ impl Sweep {
     }
 }
 
+#[cfg(test)]
 fn arg_matches(arg: &str, data_dir: &str) -> bool {
     // exact value match, not a prefix: the flag is `--user-data-dir=<value>` and nothing may follow
     match arg.strip_prefix("--user-data-dir=") {
@@ -119,9 +120,9 @@ pub fn sweep(data_dir: &Path) -> Sweep {
             }
             continue;
         }
-        if cmd.iter().any(|a| arg_matches(&a.to_string_lossy(), &want)) {
-            let is_child = cmd.iter().any(|a| a.to_string_lossy().starts_with("--type="));
-            if !is_child {
+        let args: Vec<String> = cmd.iter().map(|a| a.to_string_lossy().to_string()).collect();
+        if crate::adapter::cmd_matches(&args, &want, paths_equal) {
+            if !crate::adapter::is_child(&args) {
                 main = Some(pid.as_u32());
             }
             pids.push(pid.as_u32());

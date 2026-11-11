@@ -2,6 +2,8 @@
 // Thin GUI over the `multiapp` CLI engine (the CLI stays the source of truth).
 // Build: see build.sh in this folder. No Xcode required — plain swiftc + AppKit.
 import AppKit
+import CryptoKit
+import UserNotifications
 
 // ---------------------------------------------------------------- CLI bridge
 struct CLI {
@@ -263,9 +265,12 @@ final class CenteredDialog {
 }
 
 // ---------------------------------------------------------------- app delegate
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate {
     var statusItem: NSStatusItem!
     let menu = NSMenu()
+    var update: Release?          // newer version found by the last check
+    var notified: String?         // version already announced, so each is announced once
+    var updating = false
 
     func applicationDidFinishLaunching(_ n: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -281,12 +286,103 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Warm the backup-list cache off the main thread: building it scans every installed app and
         // takes seconds, which would otherwise stall the first click on the tray icon.
         DispatchQueue.global(qos: .utility).async { _ = CLI.run(["migrate-list", "--raw", "--refresh"]) }
+
+        // Updates: a notification with an Update button, checked shortly after start and every 6 h.
+        let nc = UNUserNotificationCenter.current()
+        nc.delegate = self
+        let act = UNNotificationAction(identifier: "UPDATE", title: "Update", options: [])
+        nc.setNotificationCategories([UNNotificationCategory(identifier: "UPDATE", actions: [act], intentIdentifiers: [])])
+        nc.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        let now = CommandLine.arguments.contains("--update-now")
+        DispatchQueue.main.asyncAfter(deadline: .now() + (now ? 1 : 5)) { self.checkForUpdates(manual: now) }
+        Timer.scheduledTimer(withTimeInterval: 6 * 60 * 60, repeats: true) { _ in self.checkForUpdates(manual: false) }
+    }
+
+    // ------------------------------------------------------------ updates
+    func checkForUpdates(manual: Bool) {
+        DispatchQueue.global(qos: .utility).async {
+            let r: Release?
+            do { r = try Updater.latest() } catch {
+                if manual { self.alertAsync("Couldn't check for updates", error.localizedDescription) }
+                return
+            }
+            DispatchQueue.main.async {
+                self.update = r
+                guard let r = r else {
+                    if manual { self.alert("Multiapp is up to date", "You have the latest version, \(Updater.current).") }
+                    return
+                }
+                if manual {
+                    // `--update-now` (used when testing a release) installs without asking
+                    if CommandLine.arguments.contains("--update-now") { self.startUpdate(); return }
+                    let d = CenteredDialog(title: "Multiapp \(r.version) is available",
+                                           message: "You have \(Updater.current). Update now? Multiapp restarts by itself.")
+                    d.addButton("Update", code: 1, key: "\r")
+                    d.addButton("Later", code: 2, key: "\u{1b}")
+                    if d.run() == 1 { self.startUpdate() }
+                    return
+                }
+                if self.notified != r.version {
+                    self.notified = r.version
+                    let c = UNMutableNotificationContent()
+                    c.title = "Multiapp \(r.version) is available"
+                    c.body = "Click to update. It takes a few seconds."
+                    c.categoryIdentifier = "UPDATE"
+                    UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "update-\(r.version)", content: c, trigger: nil))
+                }
+            }
+        }
+    }
+
+    @objc func checkUpdatesNow(_ s: NSMenuItem) { checkForUpdates(manual: true) }
+    @objc func updateNow(_ s: NSMenuItem) { startUpdate() }
+
+    func startUpdate() {
+        guard let r = update, !updating else { return }
+        updating = true
+        setBusy(true, "updating to \(r.version)…")
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let at = try Updater.install(r)
+                // start the new copy once this one has quit
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: "/bin/sh")
+                p.arguments = ["-c", "sleep 1; /usr/bin/open \"$0\"", at.path]
+                try? p.run()
+                DispatchQueue.main.async { NSApp.terminate(nil) }
+            } catch {
+                self.updating = false
+                self.setBusy(false)
+                CLI.log("update to \(r.version) FAILED: \(error.localizedDescription)")
+                self.alertAsync("Update failed", error.localizedDescription)
+            }
+        }
+    }
+
+    // clicking the notification, or its Update button, installs the update
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler done: @escaping () -> Void) {
+        if response.notification.request.content.categoryIdentifier == "UPDATE" {
+            DispatchQueue.main.async { self.startUpdate() }
+        }
+        done()
+    }
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent n: UNNotification,
+                                withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) {
+        done([.banner, .sound])   // a menu-bar app is always "in front"; show it anyway
     }
 
     func menuWillOpen(_ menu: NSMenu) { rebuild() }
 
     func rebuild() {
         menu.removeAllItems()
+        if let r = update {
+            let u = make(updating ? "Updating to \(r.version)…" : "Update to Multiapp \(r.version)", #selector(updateNow(_:)))
+            u.isEnabled = !updating
+            u.image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: nil)
+            menu.addItem(u)
+            menu.addItem(.separator())
+        }
         let profiles = CLI.profiles()
         if profiles.isEmpty {
             menu.addItem(withTitle: "No profiles yet", action: nil, keyEquivalent: "")
@@ -372,6 +468,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             v.image = ic
         }
         menu.addItem(v)
+        menu.addItem(make("Check for Updates…", #selector(checkUpdatesNow(_:))))
         menu.addItem(make("Quit Multiapp", #selector(NSApplication.terminate(_:)), key: "q"))
     }
 
@@ -829,6 +926,121 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     func alertAsync(_ title: String, _ text: String) {
         DispatchQueue.main.async { self.alert(title, text) }
+    }
+}
+
+// ---------------------------------------------------------------- updates
+// New versions are GitHub releases. The menu-bar DMG on the newest release is downloaded, checked
+// against the SHA-256 GitHub publishes for it, and swapped in place of this app (the old copy goes
+// to the Trash), then the new copy is started.
+struct Release { let version: String; let dmg: URL; let sha256: String? }
+
+enum Updater {
+    static let api = URL(string: "https://api.github.com/repos/smoker070/multiapp/releases/latest")!
+    static let bundleId = "com.multiapp.menubar"
+    static var current: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0" }
+
+    /// "0.3.10" is newer than "0.3.9": compare number by number, not as text.
+    static func isNewer(_ a: String, than b: String) -> Bool {
+        let x = a.split(separator: ".").map { Int($0) ?? 0 }, y = b.split(separator: ".").map { Int($0) ?? 0 }
+        for i in 0..<max(x.count, y.count) {
+            let p = i < x.count ? x[i] : 0, q = i < y.count ? y[i] : 0
+            if p != q { return p > q }
+        }
+        return false
+    }
+
+    /// Blocking; call off the main thread. nil = no newer version (or GitHub unreachable).
+    static func latest() throws -> Release? {
+        var req = URLRequest(url: api, timeoutInterval: 20)
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("Multiapp-MenuBar", forHTTPHeaderField: "User-Agent")
+        let data = try fetch(req)
+        guard let j = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tag = j["tag_name"] as? String else { throw err("GitHub sent an unexpected answer.") }
+        let v = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+        guard isNewer(v, than: current) else { return nil }
+        let assets = j["assets"] as? [[String: Any]] ?? []
+        guard let a = assets.first(where: { ($0["name"] as? String ?? "").hasPrefix("Multiapp-MenuBar-")
+                                            && ($0["name"] as? String ?? "").hasSuffix(".dmg") }),
+              let s = a["browser_download_url"] as? String, let u = URL(string: s) else { return nil }
+        let digest = (a["digest"] as? String).flatMap { $0.hasPrefix("sha256:") ? String($0.dropFirst(7)) : nil }
+        return Release(version: v, dmg: u, sha256: digest)
+    }
+
+    static func err(_ m: String) -> NSError { NSError(domain: "Multiapp", code: 1, userInfo: [NSLocalizedDescriptionKey: m]) }
+
+    static func fetch(_ req: URLRequest) throws -> Data {
+        var out: Result<Data, Error> = .failure(err("No answer from GitHub."))
+        let sem = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: req) { d, r, e in
+            if let e = e { out = .failure(e) }
+            else if let h = r as? HTTPURLResponse, h.statusCode != 200 { out = .failure(err("GitHub answered \(h.statusCode).")) }
+            else if let d = d { out = .success(d) }
+            sem.signal()
+        }.resume()
+        sem.wait()
+        return try out.get()
+    }
+
+    @discardableResult
+    static func sh(_ path: String, _ args: [String]) -> (code: Int32, out: String) {
+        let p = Process(); p.executableURL = URL(fileURLWithPath: path); p.arguments = args
+        let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
+        do { try p.run() } catch { return (-1, error.localizedDescription) }
+        let d = pipe.fileHandleForReading.readDataToEndOfFile(); p.waitUntilExit()
+        return (p.terminationStatus, String(data: d, encoding: .utf8) ?? "")
+    }
+
+    /// Download, verify, swap. Blocking; returns the path of the installed copy.
+    static func install(_ r: Release) throws -> URL {
+        let fm = FileManager.default
+        let work = fm.temporaryDirectory.appendingPathComponent("multiapp-update-\(UUID().uuidString)")
+        try fm.createDirectory(at: work, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: work) }
+
+        var req = URLRequest(url: r.dmg, timeoutInterval: 300)
+        req.setValue("Multiapp-MenuBar", forHTTPHeaderField: "User-Agent")
+        let data = try fetch(req)
+        if let want = r.sha256 {
+            let got = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            guard got == want.lowercased() else { throw err("The download is damaged (checksum mismatch). Nothing was changed.") }
+        }
+        let dmg = work.appendingPathComponent("update.dmg"); try data.write(to: dmg)
+
+        let mnt = work.appendingPathComponent("mnt")
+        let a = sh("/usr/bin/hdiutil", ["attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", mnt.path, dmg.path])
+        guard a.code == 0 else { throw err("Couldn't open the update: \(a.out)") }
+        defer { sh("/usr/bin/hdiutil", ["detach", mnt.path, "-force"]) }
+
+        let apps = (try? fm.contentsOfDirectory(at: mnt, includingPropertiesForKeys: nil)) ?? []
+        guard let newApp = apps.first(where: {
+            $0.pathExtension == "app" && Bundle(url: $0)?.bundleIdentifier == bundleId
+        }) else { throw err("The update doesn't contain the menu bar app.") }
+
+        // Stage next to the installed copy (same disk), so the final swap is a rename.
+        let here = Bundle.main.bundleURL
+        let staged = here.deletingLastPathComponent().appendingPathComponent(".Multiapp-update-\(r.version).app")
+        try? fm.removeItem(at: staged)
+        let c = sh("/usr/bin/ditto", [newApp.path, staged.path])
+        guard c.code == 0 else { throw err("Couldn't copy the update: \(c.out)") }
+
+        // Keep the name this copy was installed under ("Multiapp Menu Bar"), so Spotlight still
+        // tells it apart from the desktop app. Editing Info.plist breaks the ad-hoc signature, so re-sign.
+        let info = Bundle.main.infoDictionary ?? [:]
+        if let shown = info["CFBundleDisplayName"] as? String {
+            let plist = staged.appendingPathComponent("Contents/Info.plist").path
+            sh("/usr/libexec/PlistBuddy", ["-c", "Set :CFBundleName \"\(shown)\"", plist])
+            sh("/usr/libexec/PlistBuddy", ["-c", "Add :CFBundleDisplayName string \"\(shown)\"", plist])
+            sh("/usr/bin/codesign", ["--force", "-s", "-", staged.path])
+        }
+
+        try fm.trashItem(at: here, resultingItemURL: nil)
+        do { try fm.moveItem(at: staged, to: here) }
+        catch {
+            throw err("Couldn't put the new version in place: \(error.localizedDescription). The old copy is in the Trash.")
+        }
+        return here
     }
 }
 
