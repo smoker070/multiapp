@@ -2365,14 +2365,14 @@ dependencies = [
 
 [[package]]
 name = "multiapp-cli"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "multiapp-core",
 ]
 
 [[package]]
 name = "multiapp-core"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "directories",
  "rusqlite",
@@ -2385,7 +2385,7 @@ dependencies = [
 
 [[package]]
 name = "multiapp-gui"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "multiapp-core",
  "serde",

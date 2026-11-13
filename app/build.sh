@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APPVER="0.3.5"
+APPVER="0.3.6"
 # ".noindex" keeps Spotlight out: macOS skips any folder whose name ends in it. Without it every
 # staged copy of Multiapp.app below shows up as its own hit in Spotlight and Launchpad.
 BUILD="build.noindex"
