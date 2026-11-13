@@ -237,14 +237,12 @@
   .row .btn { padding:6px 12px; font-size:12px; }
   .stop { background:transparent; color:var(--danger); border-color:var(--danger); }
 
-  /* A row's action is quiet until you are on the row.
+  /* A row's action is quiet until the pointer is on THAT button.
      Every stopped profile offering a solid accent button meant a list of six was six competing
-     calls to action and no hierarchy — the "wall of buttons" look. The action still reads as a
-     button at rest; it only takes the accent once the row is hovered or the button is focused,
-     which is the moment it is actually a choice. Keyboard users get it from :focus-within. */
+     calls to action. Lighting it for the whole row was wrong too: pointing at ⋯ lit Launch, so it
+     looked as if ⋯ would launch. Only the button's own hover, or keyboard focus on it, lights it. */
   .row .btn.primary { background:var(--panel-2); color:var(--text); border-color:var(--line); box-shadow:none; }
-  .row:hover .btn.primary,
-  .row:focus-within .btn.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .row .btn.primary:hover,
   .row .btn.primary:focus-visible { background:var(--accent); color:#fff; border-color:var(--accent); }
   .stop:hover { background:var(--danger); color:#fff; }
 
