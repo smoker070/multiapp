@@ -269,6 +269,24 @@ README should not have implied otherwise.
 
 ## Installing
 
+Every release on the [Releases](../../releases) page carries the same set of files. `X.Y.Z` is the
+version number.
+
+| File | What it is for |
+|---|---|
+| `Multiapp_X.Y.Z_aarch64.dmg` | macOS (Apple Silicon): the desktop app |
+| `Multiapp-MenuBar-X.Y.Z.dmg` | macOS: the menu bar app |
+| `Multiapp_X.Y.Z_x64-setup.exe` | Windows x64: installer |
+| `Multiapp.exe` | Windows x64: portable, no install (does not update itself) |
+| `Multiapp_X.Y.Z_amd64.AppImage` | Linux x86_64 |
+| `Multiapp_X.Y.Z_aarch64.AppImage` | Linux ARM64 |
+| `Multiapp_X.Y.Z_aarch64.app.tar.gz` | Automatic update for macOS. Not for manual download |
+| `latest.json` | Automatic update index for all systems. Not for manual download |
+
+The last two files are there for the built-in updater. The macOS app cannot update itself from a
+`.dmg`, so it downloads the `.app.tar.gz` instead; `latest.json` tells every installed copy which
+version is newest and where to get it. To install Multiapp, use one of the first six files.
+
 **macOS.** Download the DMG from [Releases](../../releases), drag Multiapp to Applications, then
 right-click → **Open** → **Open** on first launch (the build is ad-hoc signed, so Gatekeeper warns
 once). For the CLI:
@@ -281,7 +299,7 @@ That puts a small self-locating stub on your `PATH`. The stub records where the 
 and re-finds it through the OS file index if the folder is ever moved, so moving or renaming the
 project directory does not break the command.
 
-**Windows.** Download `Multiapp_0.3.0_x64-setup.exe` from [Releases](../../releases) and run it —
+**Windows.** Download `Multiapp_X.Y.Z_x64-setup.exe` from [Releases](../../releases) and run it —
 that is what puts Multiapp in the Start Menu, with an uninstaller in Add or Remove Programs. A
 portable `Multiapp.exe` is also published for people who would rather not install anything; a bare
 executable is registered nowhere by Windows, so it has an **＋ Start Menu** button in the UI that
